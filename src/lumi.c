@@ -6,8 +6,10 @@
  * file, You can obtain one at https://mozilla.org.
  */
 
-#include <stdio.h>
+#include "lumi_vm.h"
 
-int main(void) {
-    printf("Hello, World!\n");
+int main(int argc, char** argv) {
+    LumiVM* vm = lumiCreateVM();
+    lumiDestroyVM(vm);
+    return 0;
 }
