@@ -15,25 +15,60 @@
 
 #define CTC constexpr static
 
-#define DEFINE_INS_REG(name) \
+#define INS_REG_LAYOUT(name) \
     CTC uint64_t INS_##name##_WIDTH = 1 + 1; \
     CTC uint64_t INS_##name##_REG_OFFSET = 1;
 
-#define DEFINE_INS_IMM(name, size) \
+#define INS_IMM_LAYOUT(name, size) \
     CTC uint64_t INS_##name##_WIDTH = 1 + (size); \
     CTC uint64_t INS_##name##_IMM_OFFSET = 1;
 
-#define DEFINE_INS_FAMILY(name) \
-    DEFINE_INS_REG(name) \
-    DEFINE_INS_IMM(name##I_B, 1) \
-    DEFINE_INS_IMM(name##I_W, 2) \
-    DEFINE_INS_IMM(name##I_DW, 4) \
-    DEFINE_INS_IMM(name##I_QW, 8)
+#define INS_RI_LAYOUT(name) \
+    INS_REG_LAYOUT(name) \
+    INS_IMM_LAYOUT(name##I_B, 1) \
+    INS_IMM_LAYOUT(name##I_W, 2) \
+    INS_IMM_LAYOUT(name##I_DW, 4) \
+    INS_IMM_LAYOUT(name##I_QW, 8)
+
+#define INS_RI_LABEL(name, lower_name) \
+    [OP_##name] = &&do_##lower_name, \
+    [OP_##name##I_B] = &&do_##lower_name##i_b, \
+    [OP_##name##I_W] = &&do_##lower_name##i_w, \
+    [OP_##name##I_DW] = &&do_##lower_name##i_dw, \
+    [OP_##name##I_QW] = &&do_##lower_name##i_qw, \
+
 
 #define CHECK_PROGRAM(name) \
     if (!hasNext(vm->pc, program_size, INS_##name##_WIDTH)) { \
         return EX_ABRUPT_END; \
     }
+
+#define INS_REG_DO(name, lower_name, op) \
+    do_##lower_name: \
+    { \
+        CHECK_PROGRAM(name) \
+        uint8_t reg = getNext(vm->pc + INS_##name##_REG_OFFSET, program); \
+        vm->cstack.accumulator op##= getCurrentCFrame(vm)->registers[reg]; \
+        vm->pc += INS_##name##_WIDTH; \
+        goto dispatch; \
+    }
+
+#define INS_IMM_DO(name, lower_name, suffix, lower_suffix, fetch_fn, op) \
+    do_##lower_name##i_##lower_suffix: \
+    { \
+        CHECK_PROGRAM(name##I_##suffix) \
+        auto imm = fetch_fn(vm->pc + INS_##name##I_##suffix##_IMM_OFFSET, program); \
+        vm->cstack.accumulator op##= imm; \
+        vm->pc += INS_##name##I_##suffix##_WIDTH; \
+        goto dispatch; \
+    }
+
+#define INS_RI_DO(name, lower_name, op) \
+    INS_REG_DO(name, lower_name, op) \
+    INS_IMM_DO(name, lower_name, B, b, getNext, op) \
+    INS_IMM_DO(name, lower_name, W, w, getNext2, op) \
+    INS_IMM_DO(name, lower_name, DW, dw, getNext4, op) \
+    INS_IMM_DO(name, lower_name, QW, qw, getNext8, op)
 
 CTC size_t CFRAME_COUNT = 128;
 CTC size_t DSTACK_BYTE_COUNT = 1024 * 1024;
@@ -49,12 +84,12 @@ CTC uint64_t INS_CALL_PC_OFFSET = 3;
 
 // CTC uint64_t INS_RET_WIDTH = 1;
 
-DEFINE_INS_REG(STR)
+INS_REG_LAYOUT(STR)
 
-DEFINE_INS_FAMILY(LOAD)
-DEFINE_INS_FAMILY(ADD)
-DEFINE_INS_FAMILY(SUB)
-DEFINE_INS_FAMILY(MUL)
+INS_RI_LAYOUT(LOAD)
+INS_RI_LAYOUT(ADD)
+INS_RI_LAYOUT(SUB)
+INS_RI_LAYOUT(MUL)
 
 static inline bool hasNext(uint64_t pc, uint64_t program_size, uint64_t bytes) {
     if (pc + bytes > program_size) return false;
@@ -178,19 +213,13 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         [OP_CALL] = &&do_call,
         [OP_RET] = &&do_ret,
 
-        [OP_LOAD] = &&do_load,
-        [OP_LOADI_B] = &&do_loadi_b,
-        [OP_LOADI_W] = &&do_loadi_w,
-        [OP_LOADI_DW] = &&do_loadi_dw,
-        [OP_LOADI_QW] = &&do_loadi_qw,
+        INS_RI_LABEL(LOAD, load)
 
         [OP_STR] = &&do_str,
 
-        [OP_ADD] = &&do_add,
-        [OP_ADDI_B] = &&do_addi_b,
-        [OP_ADDI_W] = &&do_addi_w,
-        [OP_ADDI_DW] = &&do_addi_dw,
-        [OP_ADDI_QW] = &&do_addi_qw,
+        INS_RI_LABEL(ADD, add)
+        INS_RI_LABEL(SUB, sub)
+        INS_RI_LABEL(MUL, mul)
     };
 
     dispatch:
@@ -266,60 +295,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    do_load:
-    {
-        CHECK_PROGRAM(LOAD)
-
-        uint8_t reg = getNext(vm->pc + INS_LOAD_REG_OFFSET, program);
-        vm->cstack.accumulator = getCurrentCFrame(vm)->registers[reg];
-
-        vm->pc += INS_LOAD_WIDTH;
-        goto dispatch;
-    }
-
-    do_loadi_b:
-    {
-        CHECK_PROGRAM(LOADI_B)
-
-        uint8_t imm = getNext(vm->pc + INS_LOADI_B_IMM_OFFSET, program);
-        vm->cstack.accumulator = imm;
-
-        vm->pc += INS_LOADI_B_WIDTH;
-        goto dispatch;
-    }
-
-    do_loadi_w:
-    {
-        CHECK_PROGRAM(LOADI_W)
-
-        uint16_t imm = getNext2(vm->pc + INS_LOADI_W_IMM_OFFSET, program);
-        vm->cstack.accumulator = imm;
-
-        vm->pc += INS_LOADI_W_WIDTH;
-        goto dispatch;
-    }
-
-    do_loadi_dw:
-    {
-        CHECK_PROGRAM(LOADI_DW)
-
-        uint32_t imm = getNext4(vm->pc + INS_LOADI_DW_IMM_OFFSET, program);
-        vm->cstack.accumulator = imm;
-
-        vm->pc += INS_LOADI_DW_WIDTH;
-        goto dispatch;
-    }
-
-    do_loadi_qw:
-    {
-        CHECK_PROGRAM(LOADI_QW)
-
-        uint64_t imm = getNext8(vm->pc + INS_LOADI_QW_IMM_OFFSET, program);
-        vm->cstack.accumulator = imm;
-
-        vm->pc += INS_LOADI_QW_WIDTH;
-        goto dispatch;
-    }
+    INS_RI_DO(LOAD, load,)
 
     do_str:
     {
@@ -334,58 +310,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    do_add:
-    {
-        CHECK_PROGRAM(ADD)
-
-        uint8_t reg = getNext(vm->pc + INS_ADD_REG_OFFSET, program);
-        vm->cstack.accumulator += getCurrentCFrame(vm)->registers[reg];
-
-        vm->pc += INS_ADD_WIDTH;
-        goto dispatch;
-    }
-
-    do_addi_b:
-    {
-        CHECK_PROGRAM(ADDI_B)
-
-        uint8_t imm = getNext(vm->pc + INS_ADDI_B_IMM_OFFSET, program);
-        vm->cstack.accumulator += imm;
-
-        vm->pc += INS_ADDI_B_WIDTH;
-        goto dispatch;
-    }
-
-    do_addi_w:
-    {
-        CHECK_PROGRAM(ADDI_W)
-
-        uint16_t imm = getNext2(vm->pc + INS_ADDI_W_IMM_OFFSET, program);
-        vm->cstack.accumulator += imm;
-
-        vm->pc += INS_ADDI_W_WIDTH;
-        goto dispatch;
-    }
-
-    do_addi_dw:
-    {
-        CHECK_PROGRAM(ADDI_DW)
-
-        uint32_t imm = getNext4(vm->pc + INS_ADDI_DW_IMM_OFFSET, program);
-        vm->cstack.accumulator += imm;
-
-        vm->pc += INS_ADDI_DW_WIDTH;
-        goto dispatch;
-    }
-
-    do_addi_qw:
-    {
-        CHECK_PROGRAM(ADDI_QW)
-
-        uint64_t imm = getNext8(vm->pc + INS_ADDI_QW_IMM_OFFSET, program);
-        vm->cstack.accumulator += imm;
-
-        vm->pc += INS_ADDI_QW_WIDTH;
-        goto dispatch;
-    }
+    INS_RI_DO(ADD, add, +)
+    INS_RI_DO(SUB, sub, -)
+    INS_RI_DO(MUL, mul, *)
 }
