@@ -15,47 +15,57 @@
 typedef struct LumiVM LumiVM;
 
 typedef enum : uint8_t {
-    OP_NOP   = 0x00,
-    OP_HALT  = 0X01,
+    OP_NOP  = 0x00,
+    OP_HALT = 0X01,
 
-    OP_CALL  = 0x0A,
-    OP_RET   = 0x0B,
+    OP_CALL = 0x08,
+    OP_RET  = 0x09,
 
-    OP_LOAD  = 0x10,
-    OP_LOADI = 0x11,
+    OP_LOAD     = 0x10,
+    OP_LOADI_B  = 0x11,
+    OP_LOADI_W  = 0x12,
+    OP_LOADI_DW = 0x13,
+    OP_LOADI_QW = 0x14,
 
-    OP_ADD   = 0x1A,
-    OP_ADDI  = 0x1B,
+    OP_STR = 0x18,
+
+    OP_ADD     = 0x20,
+    OP_ADDI_B  = 0x21,
+    OP_ADDI_W  = 0x22,
+    OP_ADDI_DW = 0x23,
+    OP_ADDI_QW = 0x24,
+
+    OP_SUB     = 0x28,
+    OP_SUBI_B  = 0x29,
+    OP_SUBI_W  = 0x2A,
+    OP_SUBI_DW = 0x2B,
+    OP_SUBI_QW = 0x2C,
+
+    OP_MUL     = 0x30,
+    OP_MULI_B  = 0x31,
+    OP_MULI_W  = 0x32,
+    OP_MULI_DW = 0x33,
+    OP_MILI_QW = 0x34,
 } LumiVM_OpCode;
 
 typedef enum : int32_t {
     EX_OKAY = 0x00000000,
 
-    EX_ABRUPT_END = 0x00000080,
-    EX_STACK_OF   = 0x00000081,
-    EX_ILL_INS    = 0x00000082,
-    EX_INV_INS    = 0x00000083,
+    EX_ABRUPT_END = 0x70000001,
+    EX_STACK_OF   = 0x70000002,
+    EX_ILL_INS    = 0x70000003,
+    EX_INV_INS    = 0x70000004,
 
     EX_PROGRAM_ERR = 0x7FFFFFFE,
     EX_STATE_ERR   = 0x7FFFFFFF,
 } LumiVM_ExCode;
 
-typedef enum : uint8_t {
-    IMMT_BYTE   = 0b00000000,
-    IMMT_WORD   = 0b00000001,
-    IMMT_DWORD  = 0b00000010,
-    IMMT_FDWORD = 0b10000010,
-    IMMT_QWORD  = 0b00000100,
-    IMMT_FQWORD = 0b10000100,
-} LumiVM_ImmType;
-
-typedef enum : uint8_t {
-    IMMFT_DWORD = 0b10000010,
-    IMMFT_QWORD = 0b10000100,
-} LumiVM_ImmTypeF;
-
 LumiVM* lumiCreateVM(void);
 void lumiDestroyVM(LumiVM* vm);
+
+uint64_t lumiVMGetAccumulator(LumiVM* vm);
+
 int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size);
+
 
 #endif

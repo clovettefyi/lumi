@@ -31,16 +31,35 @@ constexpr static uint64_t INS_CALL_PC_OFFSET = 3;
 constexpr static uint64_t INS_LOAD_WIDTH = 1 + 1;
 constexpr static uint64_t INS_LOAD_REG_OFFSET = 1;
 
-constexpr static uint64_t INS_LOADI_WIDTH = 1 + 1;
-constexpr static uint64_t INS_LOADI_FLAG_OFFSET = 1;
-constexpr static uint64_t INS_LOADI_IMM_OFFSET = 2;
+constexpr static uint64_t INS_LOADI_B_WIDTH = 1 + 1;
+constexpr static uint64_t INS_LOADI_B_IMM_OFFSET = 1;
+
+constexpr static uint64_t INS_LOADI_W_WIDTH = 1 + 2;
+constexpr static uint64_t INS_LOADI_W_IMM_OFFSET = 1;
+
+constexpr static uint64_t INS_LOADI_DW_WIDTH = 1 + 4;
+constexpr static uint64_t INS_LOADI_DW_IMM_OFFSET = 1;
+
+constexpr static uint64_t INS_LOADI_QW_WIDTH = 1 + 8;
+constexpr static uint64_t INS_LOADI_QW_IMM_OFFSET = 1;
+
+constexpr static uint64_t INS_STR_WIDTH = 1 + 1;
+constexpr static uint64_t INS_STR_REG_OFFSET = 1;
 
 constexpr static uint64_t INS_ADD_WIDTH = 1 + 1;
 constexpr static uint64_t INS_ADD_REG_OFFSET = 1;
 
-constexpr static uint64_t INS_ADDI_WIDTH = 1 + 1;
-constexpr static uint64_t INS_ADDI_FLAG_OFFSET = 1;
-constexpr static uint64_t INS_ADDI_IMM_OFFSET = 2;
+constexpr static uint64_t INS_ADDI_B_WIDTH = 1 + 1;
+constexpr static uint64_t INS_ADDI_B_IMM_OFFSET = 1;
+
+constexpr static uint64_t INS_ADDI_W_WIDTH = 1 + 2;
+constexpr static uint64_t INS_ADDI_W_IMM_OFFSET = 1;
+
+constexpr static uint64_t INS_ADDI_DW_WIDTH = 1 + 4;
+constexpr static uint64_t INS_ADDI_DW_IMM_OFFSET = 1;
+
+constexpr static uint64_t INS_ADDI_QW_WIDTH = 1 + 8;
+constexpr static uint64_t INS_ADDI_QW_IMM_OFFSET = 1;
 
 typedef struct {
     uint64_t registers[CFRAME_REGISTERS_COUNT];
@@ -112,6 +131,14 @@ static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
            (uint64_t)byte0;
 }
 
+static inline CFrame* getCFrame(LumiVM* vm, uint64_t fp) {
+    return vm->cstack.cframes + fp;
+}
+
+static inline CFrame* getCurrentCFrame(LumiVM* vm) {
+    return vm->cstack.cframes + vm->cstack.fp;
+}
+
 LumiVM* lumiCreateVM(void) {
     LumiVM* vm = nullptr;
     CFrame* cframes = nullptr;
@@ -155,6 +182,10 @@ void lumiDestroyVM(LumiVM* vm) {
     free(vm);
 }
 
+uint64_t lumiVMGetAccumulator(LumiVM* vm) {
+    return vm->cstack.accumulator;
+}
+
 __attribute__((noinline))
 int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
     if (vm == nullptr) {
@@ -170,12 +201,23 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
         [OP_NOP] = &&do_nop,
         [OP_HALT] = &&do_halt,
+
         [OP_CALL] = &&do_call,
         [OP_RET] = &&do_ret,
+
         [OP_LOAD] = &&do_load,
-        [OP_LOADI] = &&do_loadi,
+        [OP_LOADI_B] = &&do_loadi_b,
+        [OP_LOADI_W] = &&do_loadi_w,
+        [OP_LOADI_DW] = &&do_loadi_dw,
+        [OP_LOADI_QW] = &&do_loadi_qw,
+
+        [OP_STR] = &&do_str,
+
         [OP_ADD] = &&do_add,
-        [OP_ADDI] = &&do_addi,
+        [OP_ADDI_B] = &&do_addi_b,
+        [OP_ADDI_W] = &&do_addi_w,
+        [OP_ADDI_DW] = &&do_addi_dw,
+        [OP_ADDI_QW] = &&do_addi_qw,
     };
 
     dispatch:
@@ -227,13 +269,16 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         uint64_t caller_fp = vm->cstack.fp++;
         uint64_t callee_fp = vm->cstack.fp;
 
-        vm->cstack.cframes[callee_fp].fp = caller_fp;
-        vm->cstack.cframes[callee_fp].pc = ret_pc;
+        CFrame* caller_cf = getCFrame(vm, caller_fp);
+        CFrame* callee_cf = getCurrentCFrame(vm);
+
+        callee_cf->fp = caller_fp;
+        callee_cf->pc = ret_pc;
 
         size_t reg_count = end_reg - start_reg + 1;
 
-        uint64_t* out_regs = vm->cstack.cframes[caller_fp].registers + start_reg;
-        uint64_t* in_regs = vm->cstack.cframes[callee_fp].registers;
+        uint64_t* out_regs = caller_cf->registers + start_reg;
+        uint64_t* in_regs = callee_cf->registers;
 
         memcpy(in_regs, out_regs, reg_count * sizeof(uint64_t));
 
@@ -248,29 +293,154 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
             return EX_ILL_INS;
         }
 
-        vm->pc = vm->cstack.cframes[vm->cstack.fp].pc;
-        vm->cstack.fp = vm->cstack.cframes[vm->cstack.fp].fp;
+        vm->pc = getCurrentCFrame(vm)->pc;
+        vm->cstack.fp = getCurrentCFrame(vm)->fp;
 
         goto dispatch;
     }
 
     do_load:
     {
+        if (!hasNext(vm->pc, program_size, INS_LOAD_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint8_t reg = getNext(vm->pc + INS_LOAD_REG_OFFSET, program);
+        vm->cstack.accumulator = getCurrentCFrame(vm)->registers[reg];
+
+        vm->pc += INS_LOAD_WIDTH;
         goto dispatch;
     }
 
-    do_loadi:
+    do_loadi_b:
     {
+        if (!hasNext(vm->pc, program_size, INS_LOADI_B_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint8_t imm = getNext(vm->pc + INS_LOADI_B_IMM_OFFSET, program);
+        vm->cstack.accumulator = imm;
+
+        vm->pc += INS_LOADI_B_WIDTH;
+        goto dispatch;
+    }
+
+    do_loadi_w:
+    {
+        if (!hasNext(vm->pc, program_size, INS_LOADI_W_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint16_t imm = getNext2(vm->pc + INS_LOADI_W_IMM_OFFSET, program);
+        vm->cstack.accumulator = imm;
+
+        vm->pc += INS_LOADI_W_WIDTH;
+        goto dispatch;
+    }
+
+    do_loadi_dw:
+    {
+        if (!hasNext(vm->pc, program_size, INS_LOADI_DW_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint32_t imm = getNext4(vm->pc + INS_LOADI_DW_IMM_OFFSET, program);
+        vm->cstack.accumulator = imm;
+
+        vm->pc += INS_LOADI_DW_WIDTH;
+        goto dispatch;
+    }
+
+    do_loadi_qw:
+    {
+        if (!hasNext(vm->pc, program_size, INS_LOADI_QW_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint64_t imm = getNext8(vm->pc + INS_LOADI_QW_IMM_OFFSET, program);
+        vm->cstack.accumulator = imm;
+
+        vm->pc += INS_LOADI_QW_WIDTH;
+        goto dispatch;
+    }
+
+    do_str:
+    {
+        if (!hasNext(vm->pc, program_size, INS_STR_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint8_t reg = getNext(vm->pc + INS_STR_REG_OFFSET, program);
+        CFrame* cf = getCurrentCFrame(vm);
+
+        cf->registers[reg] = vm->cstack.accumulator;
+
+        vm->pc += INS_STR_WIDTH;
         goto dispatch;
     }
 
     do_add:
     {
+        if (!hasNext(vm->pc, program_size, INS_ADD_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint8_t reg = getNext(vm->pc + INS_ADD_REG_OFFSET, program);
+        vm->cstack.accumulator += getCurrentCFrame(vm)->registers[reg];
+
+        vm->pc += INS_ADD_WIDTH;
         goto dispatch;
     }
 
-    do_addi:
+    do_addi_b:
     {
+        if (!hasNext(vm->pc, program_size, INS_ADDI_B_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint8_t imm = getNext(vm->pc + INS_ADDI_B_IMM_OFFSET, program);
+        vm->cstack.accumulator += imm;
+
+        vm->pc += INS_ADDI_B_WIDTH;
+        goto dispatch;
+    }
+
+    do_addi_w:
+    {
+        if (!hasNext(vm->pc, program_size, INS_ADDI_W_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint16_t imm = getNext2(vm->pc + INS_ADDI_W_IMM_OFFSET, program);
+        vm->cstack.accumulator += imm;
+
+        vm->pc += INS_ADDI_W_WIDTH;
+        goto dispatch;
+    }
+
+    do_addi_dw:
+    {
+        if (!hasNext(vm->pc, program_size, INS_ADDI_DW_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint32_t imm = getNext4(vm->pc + INS_ADDI_DW_IMM_OFFSET, program);
+        vm->cstack.accumulator += imm;
+
+        vm->pc += INS_ADDI_DW_WIDTH;
+        goto dispatch;
+    }
+
+    do_addi_qw:
+    {
+        if (!hasNext(vm->pc, program_size, INS_ADDI_QW_WIDTH)) {
+            return EX_ABRUPT_END;
+        }
+
+        uint64_t imm = getNext8(vm->pc + INS_ADDI_QW_IMM_OFFSET, program);
+        vm->cstack.accumulator += imm;
+
+        vm->pc += INS_ADDI_QW_WIDTH;
         goto dispatch;
     }
 }
