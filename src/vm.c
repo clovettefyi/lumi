@@ -8,6 +8,7 @@
 
 #include "lumi_vm.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -91,6 +92,12 @@ INS_RI_LAYOUT(ADD)
 INS_RI_LAYOUT(SUB)
 INS_RI_LAYOUT(MUL)
 
+CTC uint64_t INS_JMP_WIDTH = 1 + 8;
+CTC uint64_t INS_JMP_PC_OFFSET = 1;
+
+CTC uint64_t INS_JNZ_WIDTH = 1 + 8;
+CTC uint64_t INS_JNZ_PC_OFFSET = 1;
+
 static inline bool hasNext(uint64_t pc, uint64_t program_size, uint64_t bytes) {
     if (pc + bytes > program_size) return false;
     return true;
@@ -101,42 +108,21 @@ static inline uint8_t getNext(uint64_t pc, const uint8_t* program) {
 }
 
 static inline uint16_t getNext2(uint64_t pc, const uint8_t* program) {
-    uint8_t byte0 = program[pc];
-    uint8_t byte1 = program[pc + 1];
-
-    return ((uint16_t)byte1 << 8) | byte0;
+    uint16_t val;
+    memcpy(&val, &program[pc], sizeof(uint16_t));
+    return val;
 }
 
 static inline uint32_t getNext4(uint64_t pc, const uint8_t* program) {
-    uint8_t byte0 = program[pc];
-    uint8_t byte1 = program[pc + 1];
-    uint8_t byte2 = program[pc + 2];
-    uint8_t byte3 = program[pc + 3];
-
-    return ((uint32_t)byte3 << 24) |
-           ((uint32_t)byte2 << 16) |
-           ((uint32_t)byte1 << 8)  |
-           (uint32_t)byte0;
+    uint32_t val;
+    memcpy(&val, &program[pc], sizeof(uint32_t));
+    return val;
 }
 
 static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
-    uint8_t byte0 = program[pc];
-    uint8_t byte1 = program[pc + 1];
-    uint8_t byte2 = program[pc + 2];
-    uint8_t byte3 = program[pc + 3];
-    uint8_t byte4 = program[pc + 4];
-    uint8_t byte5 = program[pc + 5];
-    uint8_t byte6 = program[pc + 6];
-    uint8_t byte7 = program[pc + 7];
-
-    return ((uint64_t)byte7 << 56) |
-           ((uint64_t)byte6 << 48) |
-           ((uint64_t)byte5 << 40) |
-           ((uint64_t)byte4 << 32) |
-           ((uint64_t)byte3 << 24) |
-           ((uint64_t)byte2 << 16) |
-           ((uint64_t)byte1 << 8)  |
-           (uint64_t)byte0;
+    uint64_t val;
+    memcpy(&val, &program[pc], sizeof(uint64_t));
+    return val;
 }
 
 static inline LumiVMCFrame* getCFrame(LumiVM* vm, uint64_t fp) {
@@ -220,6 +206,9 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         INS_RI_LABEL(ADD, add)
         INS_RI_LABEL(SUB, sub)
         INS_RI_LABEL(MUL, mul)
+
+        [OP_JMP] = &&do_jmp,
+        [OP_JNZ] = &&do_jnz,
     };
 
     dispatch:
@@ -233,7 +222,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_invalid:
     {
-        return EX_INV_INS;
+        return EX_ILL_INS;
     }
 
     do_nop:
@@ -313,4 +302,29 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
     INS_RI_DO(ADD, add, +)
     INS_RI_DO(SUB, sub, -)
     INS_RI_DO(MUL, mul, *)
+
+    do_jmp:
+    {
+        CHECK_PROGRAM(JMP)
+
+        uint64_t pc = getNext8(vm->pc + INS_JMP_PC_OFFSET, program);
+        vm->pc = pc;
+
+        goto dispatch;
+    }
+
+    do_jnz:
+    {
+        CHECK_PROGRAM(JNZ)
+
+        if (vm->cstack.accumulator == 0) {
+            vm->pc += INS_JNZ_WIDTH;
+            goto dispatch;
+        }
+
+        uint64_t pc = getNext8(vm->pc + INS_JNZ_PC_OFFSET, program);
+        vm->pc = pc;
+
+        goto dispatch;
+    }
 }

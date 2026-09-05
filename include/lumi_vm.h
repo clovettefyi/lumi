@@ -65,6 +65,9 @@ typedef enum : uint8_t {
     OP_MULI_W  = 0x32,
     OP_MULI_DW = 0x33,
     OP_MULI_QW = 0x34,
+
+    OP_JMP = 0x38,
+    OP_JNZ = 0x39,
 } LumiVM_OpCode;
 
 typedef enum : int32_t {
