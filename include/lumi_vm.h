@@ -12,7 +12,26 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct LumiVM LumiVM;
+typedef struct {
+    uint64_t registers[256];
+    uint64_t pc;
+} LumiVMCFrame;
+
+typedef struct {
+    struct {
+        LumiVMCFrame* cframes;
+        uint64_t fp;
+        uint64_t accumulator;
+    } cstack;
+
+    struct {
+        uint8_t* data;
+        uint64_t sp;
+        uint64_t bp;
+    } dstack;
+
+    uint64_t pc;
+} LumiVM;
 
 typedef enum : uint8_t {
     OP_NOP  = 0x00,
@@ -66,6 +85,5 @@ void lumiDestroyVM(LumiVM* vm);
 uint64_t lumiVMGetAccumulator(LumiVM* vm);
 
 int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size);
-
 
 #endif

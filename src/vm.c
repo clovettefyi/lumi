@@ -13,75 +13,48 @@
 #include <string.h>
 #include <stddef.h>
 
-constexpr static size_t CFRAME_REGISTERS_COUNT = 256;
-constexpr static size_t CFRAME_COUNT = 128;
-constexpr static size_t DSTACK_BYTE_COUNT = 1024 * 1024;
+#define CTC constexpr static
 
-constexpr static uint64_t INS_NOP_WIDTH = 1;
+#define DEFINE_INS_REG(name) \
+    CTC uint64_t INS_##name##_WIDTH = 1 + 1; \
+    CTC uint64_t INS_##name##_REG_OFFSET = 1;
 
-// constexpr static uint64_t INS_HALT_WIDTH = 1;
+#define DEFINE_INS_IMM(name, size) \
+    CTC uint64_t INS_##name##_WIDTH = 1 + (size); \
+    CTC uint64_t INS_##name##_IMM_OFFSET = 1;
 
-constexpr static uint64_t INS_CALL_WIDTH = 1 + 1 + 1 + 8;
-constexpr static uint64_t INS_CALL_SREG_OFFSET = 1;
-constexpr static uint64_t INS_CALL_EREG_OFFSET = 2;
-constexpr static uint64_t INS_CALL_PC_OFFSET = 3;
+#define DEFINE_INS_FAMILY(name) \
+    DEFINE_INS_REG(name) \
+    DEFINE_INS_IMM(name##I_B, 1) \
+    DEFINE_INS_IMM(name##I_W, 2) \
+    DEFINE_INS_IMM(name##I_DW, 4) \
+    DEFINE_INS_IMM(name##I_QW, 8)
 
-// constexpr static uint64_t INS_RET_WIDTH = 1;
+#define CHECK_PROGRAM(name) \
+    if (!hasNext(vm->pc, program_size, INS_##name##_WIDTH)) { \
+        return EX_ABRUPT_END; \
+    }
 
-constexpr static uint64_t INS_LOAD_WIDTH = 1 + 1;
-constexpr static uint64_t INS_LOAD_REG_OFFSET = 1;
+CTC size_t CFRAME_COUNT = 128;
+CTC size_t DSTACK_BYTE_COUNT = 1024 * 1024;
 
-constexpr static uint64_t INS_LOADI_B_WIDTH = 1 + 1;
-constexpr static uint64_t INS_LOADI_B_IMM_OFFSET = 1;
+CTC uint64_t INS_NOP_WIDTH = 1;
 
-constexpr static uint64_t INS_LOADI_W_WIDTH = 1 + 2;
-constexpr static uint64_t INS_LOADI_W_IMM_OFFSET = 1;
+// CTC uint64_t INS_HALT_WIDTH = 1;
 
-constexpr static uint64_t INS_LOADI_DW_WIDTH = 1 + 4;
-constexpr static uint64_t INS_LOADI_DW_IMM_OFFSET = 1;
+CTC uint64_t INS_CALL_WIDTH = 1 + 1 + 1 + 8;
+CTC uint64_t INS_CALL_SREG_OFFSET = 1;
+CTC uint64_t INS_CALL_EREG_OFFSET = 2;
+CTC uint64_t INS_CALL_PC_OFFSET = 3;
 
-constexpr static uint64_t INS_LOADI_QW_WIDTH = 1 + 8;
-constexpr static uint64_t INS_LOADI_QW_IMM_OFFSET = 1;
+// CTC uint64_t INS_RET_WIDTH = 1;
 
-constexpr static uint64_t INS_STR_WIDTH = 1 + 1;
-constexpr static uint64_t INS_STR_REG_OFFSET = 1;
+DEFINE_INS_REG(STR)
 
-constexpr static uint64_t INS_ADD_WIDTH = 1 + 1;
-constexpr static uint64_t INS_ADD_REG_OFFSET = 1;
-
-constexpr static uint64_t INS_ADDI_B_WIDTH = 1 + 1;
-constexpr static uint64_t INS_ADDI_B_IMM_OFFSET = 1;
-
-constexpr static uint64_t INS_ADDI_W_WIDTH = 1 + 2;
-constexpr static uint64_t INS_ADDI_W_IMM_OFFSET = 1;
-
-constexpr static uint64_t INS_ADDI_DW_WIDTH = 1 + 4;
-constexpr static uint64_t INS_ADDI_DW_IMM_OFFSET = 1;
-
-constexpr static uint64_t INS_ADDI_QW_WIDTH = 1 + 8;
-constexpr static uint64_t INS_ADDI_QW_IMM_OFFSET = 1;
-
-typedef struct {
-    uint64_t registers[CFRAME_REGISTERS_COUNT];
-    uint64_t fp;
-    uint64_t pc;
-} CFrame;
-
-struct LumiVM {
-    struct {
-        CFrame* cframes;
-        uint64_t fp;
-        uint64_t accumulator;
-    } cstack;
-
-    struct {
-        uint8_t* data;
-        uint64_t sp;
-        uint64_t bp;
-    } dstack;
-
-    uint64_t pc;
-};
+DEFINE_INS_FAMILY(LOAD)
+DEFINE_INS_FAMILY(ADD)
+DEFINE_INS_FAMILY(SUB)
+DEFINE_INS_FAMILY(MUL)
 
 static inline bool hasNext(uint64_t pc, uint64_t program_size, uint64_t bytes) {
     if (pc + bytes > program_size) return false;
@@ -131,17 +104,17 @@ static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
            (uint64_t)byte0;
 }
 
-static inline CFrame* getCFrame(LumiVM* vm, uint64_t fp) {
+static inline LumiVMCFrame* getCFrame(LumiVM* vm, uint64_t fp) {
     return vm->cstack.cframes + fp;
 }
 
-static inline CFrame* getCurrentCFrame(LumiVM* vm) {
+static inline LumiVMCFrame* getCurrentCFrame(LumiVM* vm) {
     return vm->cstack.cframes + vm->cstack.fp;
 }
 
 LumiVM* lumiCreateVM(void) {
     LumiVM* vm = nullptr;
-    CFrame* cframes = nullptr;
+    LumiVMCFrame* cframes = nullptr;
     uint8_t* data = nullptr;
 
     vm = calloc(1, sizeof(LumiVM));
@@ -149,7 +122,7 @@ LumiVM* lumiCreateVM(void) {
         goto cleanup;
     }
 
-    cframes = calloc(CFRAME_COUNT, sizeof(CFrame));
+    cframes = calloc(CFRAME_COUNT, sizeof(LumiVMCFrame));
     if (cframes == nullptr) {
         goto cleanup;
     }
@@ -248,9 +221,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_call:
     {
-        if (!hasNext(vm->pc, program_size, INS_CALL_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(CALL)
 
         if (vm->cstack.fp + 1 >= CFRAME_COUNT) {
             return EX_STACK_OF;
@@ -266,13 +237,9 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         uint64_t jmp_pc = getNext8(vm->pc + INS_CALL_PC_OFFSET, program);
         uint64_t ret_pc = vm->pc + INS_CALL_WIDTH;
 
-        uint64_t caller_fp = vm->cstack.fp++;
-        uint64_t callee_fp = vm->cstack.fp;
+        LumiVMCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
+        LumiVMCFrame* callee_cf = getCurrentCFrame(vm);
 
-        CFrame* caller_cf = getCFrame(vm, caller_fp);
-        CFrame* callee_cf = getCurrentCFrame(vm);
-
-        callee_cf->fp = caller_fp;
         callee_cf->pc = ret_pc;
 
         size_t reg_count = end_reg - start_reg + 1;
@@ -294,16 +261,14 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         }
 
         vm->pc = getCurrentCFrame(vm)->pc;
-        vm->cstack.fp = getCurrentCFrame(vm)->fp;
+        vm->cstack.fp--;
 
         goto dispatch;
     }
 
     do_load:
     {
-        if (!hasNext(vm->pc, program_size, INS_LOAD_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(LOAD)
 
         uint8_t reg = getNext(vm->pc + INS_LOAD_REG_OFFSET, program);
         vm->cstack.accumulator = getCurrentCFrame(vm)->registers[reg];
@@ -314,9 +279,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_loadi_b:
     {
-        if (!hasNext(vm->pc, program_size, INS_LOADI_B_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(LOADI_B)
 
         uint8_t imm = getNext(vm->pc + INS_LOADI_B_IMM_OFFSET, program);
         vm->cstack.accumulator = imm;
@@ -327,9 +290,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_loadi_w:
     {
-        if (!hasNext(vm->pc, program_size, INS_LOADI_W_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(LOADI_W)
 
         uint16_t imm = getNext2(vm->pc + INS_LOADI_W_IMM_OFFSET, program);
         vm->cstack.accumulator = imm;
@@ -340,9 +301,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_loadi_dw:
     {
-        if (!hasNext(vm->pc, program_size, INS_LOADI_DW_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(LOADI_DW)
 
         uint32_t imm = getNext4(vm->pc + INS_LOADI_DW_IMM_OFFSET, program);
         vm->cstack.accumulator = imm;
@@ -353,9 +312,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_loadi_qw:
     {
-        if (!hasNext(vm->pc, program_size, INS_LOADI_QW_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(LOADI_QW)
 
         uint64_t imm = getNext8(vm->pc + INS_LOADI_QW_IMM_OFFSET, program);
         vm->cstack.accumulator = imm;
@@ -366,12 +323,10 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_str:
     {
-        if (!hasNext(vm->pc, program_size, INS_STR_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(STR)
 
         uint8_t reg = getNext(vm->pc + INS_STR_REG_OFFSET, program);
-        CFrame* cf = getCurrentCFrame(vm);
+        LumiVMCFrame* cf = getCurrentCFrame(vm);
 
         cf->registers[reg] = vm->cstack.accumulator;
 
@@ -381,9 +336,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_add:
     {
-        if (!hasNext(vm->pc, program_size, INS_ADD_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(ADD)
 
         uint8_t reg = getNext(vm->pc + INS_ADD_REG_OFFSET, program);
         vm->cstack.accumulator += getCurrentCFrame(vm)->registers[reg];
@@ -394,9 +347,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_addi_b:
     {
-        if (!hasNext(vm->pc, program_size, INS_ADDI_B_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(ADDI_B)
 
         uint8_t imm = getNext(vm->pc + INS_ADDI_B_IMM_OFFSET, program);
         vm->cstack.accumulator += imm;
@@ -407,9 +358,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_addi_w:
     {
-        if (!hasNext(vm->pc, program_size, INS_ADDI_W_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(ADDI_W)
 
         uint16_t imm = getNext2(vm->pc + INS_ADDI_W_IMM_OFFSET, program);
         vm->cstack.accumulator += imm;
@@ -420,9 +369,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_addi_dw:
     {
-        if (!hasNext(vm->pc, program_size, INS_ADDI_DW_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(ADDI_DW)
 
         uint32_t imm = getNext4(vm->pc + INS_ADDI_DW_IMM_OFFSET, program);
         vm->cstack.accumulator += imm;
@@ -433,9 +380,7 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_addi_qw:
     {
-        if (!hasNext(vm->pc, program_size, INS_ADDI_QW_WIDTH)) {
-            return EX_ABRUPT_END;
-        }
+        CHECK_PROGRAM(ADDI_QW)
 
         uint64_t imm = getNext8(vm->pc + INS_ADDI_QW_IMM_OFFSET, program);
         vm->cstack.accumulator += imm;
