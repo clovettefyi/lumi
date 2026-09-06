@@ -21,7 +21,6 @@ typedef struct {
     struct {
         LumiVMCFrame* cframes;
         uint64_t fp;
-        uint64_t accumulator;
     } cstack;
 
     struct {
@@ -40,31 +39,30 @@ typedef enum : uint8_t {
     OP_CALL = 0x08,
     OP_RET  = 0x09,
 
-    OP_LOAD     = 0x10,
-    OP_LOADI_B  = 0x11,
-    OP_LOADI_W  = 0x12,
-    OP_LOADI_DW = 0x13,
-    OP_LOADI_QW = 0x14,
+    OP_MOV = 0x10,
 
-    OP_STR = 0x18,
+    OP_LOAD_B  = 0x11,
+    OP_LOAD_W  = 0x12,
+    OP_LOAD_DW = 0x13,
+    OP_LOAD_QW = 0x14,
 
     OP_ADD     = 0x20,
-    OP_ADDI_B  = 0x21,
-    OP_ADDI_W  = 0x22,
-    OP_ADDI_DW = 0x23,
-    OP_ADDI_QW = 0x24,
+    OP_ADD_B  = 0x21,
+    OP_ADD_W  = 0x22,
+    OP_ADD_DW = 0x23,
+    OP_ADD_QW = 0x24,
 
     OP_SUB     = 0x28,
-    OP_SUBI_B  = 0x29,
-    OP_SUBI_W  = 0x2A,
-    OP_SUBI_DW = 0x2B,
-    OP_SUBI_QW = 0x2C,
+    OP_SUB_B  = 0x29,
+    OP_SUB_W  = 0x2A,
+    OP_SUB_DW = 0x2B,
+    OP_SUB_QW = 0x2C,
 
     OP_MUL     = 0x30,
-    OP_MULI_B  = 0x31,
-    OP_MULI_W  = 0x32,
-    OP_MULI_DW = 0x33,
-    OP_MULI_QW = 0x34,
+    OP_MUL_B  = 0x31,
+    OP_MUL_W  = 0x32,
+    OP_MUL_DW = 0x33,
+    OP_MUL_QW = 0x34,
 
     OP_JMP = 0x38,
     OP_JNZ = 0x39,
@@ -84,9 +82,6 @@ typedef enum : int32_t {
 
 LumiVM* lumiCreateVM(void);
 void lumiDestroyVM(LumiVM* vm);
-
-uint64_t lumiVMGetAccumulator(LumiVM* vm);
-
 int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size);
 
 #endif

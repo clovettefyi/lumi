@@ -8,71 +8,56 @@
 
 #include "lumi_vm.h"
 
-#include <stdatomic.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <stddef.h>
 
+/*
+ -- MACROS --
+*/
+
 #define CTC constexpr static
 
 #define INS_REG_LAYOUT(name) \
-    CTC uint64_t INS_##name##_WIDTH = 1 + 1; \
-    CTC uint64_t INS_##name##_REG_OFFSET = 1;
+    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + 1; \
+    CTC uint64_t INS_##name##_DST_OFFSET = 1; \
+    CTC uint64_t INS_##name##_SRC_OFFSET = 2;
 
 #define INS_IMM_LAYOUT(name, size) \
-    CTC uint64_t INS_##name##_WIDTH = 1 + (size); \
-    CTC uint64_t INS_##name##_IMM_OFFSET = 1;
-
-#define INS_RI_LAYOUT(name) \
-    INS_REG_LAYOUT(name) \
-    INS_IMM_LAYOUT(name##I_B, 1) \
-    INS_IMM_LAYOUT(name##I_W, 2) \
-    INS_IMM_LAYOUT(name##I_DW, 4) \
-    INS_IMM_LAYOUT(name##I_QW, 8)
-
-#define INS_RI_LABEL(name, lower_name) \
-    [OP_##name] = &&do_##lower_name, \
-    [OP_##name##I_B] = &&do_##lower_name##i_b, \
-    [OP_##name##I_W] = &&do_##lower_name##i_w, \
-    [OP_##name##I_DW] = &&do_##lower_name##i_dw, \
-    [OP_##name##I_QW] = &&do_##lower_name##i_qw, \
-
+    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + (size); \
+    CTC uint64_t INS_##name##_DST_OFFSET = 1; \
+    CTC uint64_t INS_##name##_IMM_OFFSET = 2;
 
 #define CHECK_PROGRAM(name) \
     if (!hasNext(vm->pc, program_size, INS_##name##_WIDTH)) { \
         return EX_ABRUPT_END; \
     }
 
-#define INS_REG_DO(name, lower_name, op) \
-    do_##lower_name: \
-    { \
-        CHECK_PROGRAM(name) \
-        uint8_t reg = getNext(vm->pc + INS_##name##_REG_OFFSET, program); \
-        vm->cstack.accumulator op##= getCurrentCFrame(vm)->registers[reg]; \
-        vm->pc += INS_##name##_WIDTH; \
-        goto dispatch; \
-    }
+#define INS_REG_DO(name, op) \
+    uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
+    uint8_t src = getNext(vm->pc + INS_##name##_SRC_OFFSET, program); \
+    LumiVMCFrame* cf = getCurrentCFrame(vm); \
+    cf->registers[dst] op##= cf->registers[src]; \
+    vm->pc += INS_##name##_WIDTH; \
 
-#define INS_IMM_DO(name, lower_name, suffix, lower_suffix, fetch_fn, op) \
-    do_##lower_name##i_##lower_suffix: \
-    { \
-        CHECK_PROGRAM(name##I_##suffix) \
-        auto imm = fetch_fn(vm->pc + INS_##name##I_##suffix##_IMM_OFFSET, program); \
-        vm->cstack.accumulator op##= imm; \
-        vm->pc += INS_##name##I_##suffix##_WIDTH; \
-        goto dispatch; \
-    }
+#define INS_IMM_DO(name, fetch_fn, op) \
+    uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
+    auto imm = fetch_fn(vm->pc + INS_##name##_IMM_OFFSET, program); \
+    LumiVMCFrame* cf = getCurrentCFrame(vm); \
+    cf->registers[dst] op##= imm; \
+    vm->pc += INS_##name##_WIDTH; \
 
-#define INS_RI_DO(name, lower_name, op) \
-    INS_REG_DO(name, lower_name, op) \
-    INS_IMM_DO(name, lower_name, B, b, getNext, op) \
-    INS_IMM_DO(name, lower_name, W, w, getNext2, op) \
-    INS_IMM_DO(name, lower_name, DW, dw, getNext4, op) \
-    INS_IMM_DO(name, lower_name, QW, qw, getNext8, op)
+/*
+ -- VM CONSTANTS --
+*/
 
 CTC size_t CFRAME_COUNT = 128;
 CTC size_t DSTACK_BYTE_COUNT = 1024 * 1024;
+
+/*
+ -- INSTRUCTION LAYOUT --
+*/
 
 CTC uint64_t INS_NOP_WIDTH = 1;
 
@@ -83,20 +68,40 @@ CTC uint64_t INS_CALL_SREG_OFFSET = 1;
 CTC uint64_t INS_CALL_EREG_OFFSET = 2;
 CTC uint64_t INS_CALL_PC_OFFSET = 3;
 
-// CTC uint64_t INS_RET_WIDTH = 1;
+CTC uint64_t INS_RET_WIDTH = 1 + 1;
+CTC uint64_t INS_RET_REG_OFFSET = 1;
 
-INS_REG_LAYOUT(STR)
+INS_REG_LAYOUT(MOV);
 
-INS_RI_LAYOUT(LOAD)
-INS_RI_LAYOUT(ADD)
-INS_RI_LAYOUT(SUB)
-INS_RI_LAYOUT(MUL)
+INS_IMM_LAYOUT(LOAD_B, 1);
+INS_IMM_LAYOUT(LOAD_W, 2);
+INS_IMM_LAYOUT(LOAD_DW, 4);
+INS_IMM_LAYOUT(LOAD_QW, 8);
+
+INS_REG_LAYOUT(ADD);
+INS_IMM_LAYOUT(ADD_B, 1);
+INS_IMM_LAYOUT(ADD_W, 2);
+INS_IMM_LAYOUT(ADD_DW, 4);
+INS_IMM_LAYOUT(ADD_QW, 8);
+
+INS_REG_LAYOUT(SUB);
+INS_IMM_LAYOUT(SUB_B, 1);
+INS_IMM_LAYOUT(SUB_W, 2);
+INS_IMM_LAYOUT(SUB_DW, 4);
+INS_IMM_LAYOUT(SUB_QW, 8);
+
+INS_REG_LAYOUT(MUL);
+INS_IMM_LAYOUT(MUL_B, 1);
+INS_IMM_LAYOUT(MUL_W, 2);
+INS_IMM_LAYOUT(MUL_DW, 4);
+INS_IMM_LAYOUT(MUL_QW, 8);
 
 CTC uint64_t INS_JMP_WIDTH = 1 + 8;
 CTC uint64_t INS_JMP_PC_OFFSET = 1;
 
-CTC uint64_t INS_JNZ_WIDTH = 1 + 8;
-CTC uint64_t INS_JNZ_PC_OFFSET = 1;
+CTC uint64_t INS_JNZ_WIDTH = 1 + 1 + 8;
+CTC uint64_t INS_JNZ_REG_OFFSET = 1;
+CTC uint64_t INS_JNZ_PC_OFFSET = 2;
 
 static inline bool hasNext(uint64_t pc, uint64_t program_size, uint64_t bytes) {
     if (pc + bytes > program_size) return false;
@@ -176,10 +181,6 @@ void lumiDestroyVM(LumiVM* vm) {
     free(vm);
 }
 
-uint64_t lumiVMGetAccumulator(LumiVM* vm) {
-    return vm->cstack.accumulator;
-}
-
 __attribute__((noinline))
 int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
     if (vm == nullptr) {
@@ -199,20 +200,36 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         [OP_CALL] = &&do_call,
         [OP_RET] = &&do_ret,
 
-        INS_RI_LABEL(LOAD, load)
+        [OP_MOV] = &&do_mov,
 
-        [OP_STR] = &&do_str,
+        [OP_LOAD_B] = &&do_load_b,
+        [OP_LOAD_W] = &&do_load_w,
+        [OP_LOAD_DW] = &&do_load_dw,
+        [OP_LOAD_QW] = &&do_load_qw,
 
-        INS_RI_LABEL(ADD, add)
-        INS_RI_LABEL(SUB, sub)
-        INS_RI_LABEL(MUL, mul)
+        [OP_ADD] = &&do_add,
+        [OP_ADD_B] = &&do_add_b,
+        [OP_ADD_W] = &&do_add_w,
+        [OP_ADD_DW] = &&do_add_dw,
+        [OP_ADD_QW] = &&do_add_qw,
+
+        [OP_SUB] = &&do_sub,
+        [OP_SUB_B] = &&do_sub_b,
+        [OP_SUB_W] = &&do_sub_w,
+        [OP_SUB_DW] = &&do_sub_dw,
+        [OP_SUB_QW] = &&do_sub_qw,
+
+        [OP_MUL] = &&do_mul,
+        [OP_MUL_B] = &&do_mul_b,
+        [OP_MUL_W] = &&do_mul_w,
+        [OP_MUL_DW] = &&do_mul_dw,
+        [OP_MUL_QW] = &&do_mul_qw,
 
         [OP_JMP] = &&do_jmp,
         [OP_JNZ] = &&do_jnz,
     };
 
-    dispatch:
-    {
+    dispatch: {
         if (vm->pc >= program_size) {
             return EX_ABRUPT_END;
         }
@@ -220,26 +237,22 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
          goto *dispatch_table[program[vm->pc]];
     }
 
-    do_invalid:
-    {
+    do_invalid: {
         return EX_ILL_INS;
     }
 
-    do_nop:
-    {
+    do_nop: {
         vm->pc += INS_NOP_WIDTH;
 
         goto dispatch;
     }
 
-    do_halt:
-    {
-        return vm->cstack.accumulator;
+    do_halt: {
+        return getCurrentCFrame(vm)->registers[0];
     }
 
-    do_call:
-    {
-        CHECK_PROGRAM(CALL)
+    do_call: {
+        CHECK_PROGRAM(CALL);
 
         if (vm->cstack.fp + 1 >= CFRAME_COUNT) {
             return EX_STACK_OF;
@@ -272,40 +285,144 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    do_ret:
-    {
+    do_ret: {
         if (vm->cstack.fp == 0) {
             return EX_ILL_INS;
         }
 
+        CHECK_PROGRAM(RET);
+
+        uint64_t* ret_reg = getCurrentCFrame(vm)->registers + getNext(vm->pc + INS_RET_REG_OFFSET, program);
+
         vm->pc = getCurrentCFrame(vm)->pc;
         vm->cstack.fp--;
 
+        memcpy(getCurrentCFrame(vm)->registers, ret_reg, sizeof(uint64_t));
+
         goto dispatch;
     }
 
-    INS_RI_DO(LOAD, load,)
-
-    do_str:
-    {
-        CHECK_PROGRAM(STR)
-
-        uint8_t reg = getNext(vm->pc + INS_STR_REG_OFFSET, program);
-        LumiVMCFrame* cf = getCurrentCFrame(vm);
-
-        cf->registers[reg] = vm->cstack.accumulator;
-
-        vm->pc += INS_STR_WIDTH;
+    do_mov: {
+        CHECK_PROGRAM(MOV);
+        INS_REG_DO(MOV,);
         goto dispatch;
     }
 
-    INS_RI_DO(ADD, add, +)
-    INS_RI_DO(SUB, sub, -)
-    INS_RI_DO(MUL, mul, *)
+    do_load_b: {
+        CHECK_PROGRAM(LOAD_B);
+        INS_IMM_DO(LOAD_B, getNext,);
+        goto dispatch;
+    }
 
-    do_jmp:
-    {
-        CHECK_PROGRAM(JMP)
+    do_load_w: {
+        CHECK_PROGRAM(LOAD_W);
+        INS_IMM_DO(LOAD_W, getNext2,);
+        goto dispatch;
+    }
+
+    do_load_dw: {
+        CHECK_PROGRAM(LOAD_DW);
+        INS_IMM_DO(LOAD_DW, getNext4,);
+        goto dispatch;
+    }
+
+    do_load_qw: {
+        CHECK_PROGRAM(LOAD_QW);
+        INS_IMM_DO(LOAD_QW, getNext8,);
+        goto dispatch;
+    }
+
+    do_add: {
+        CHECK_PROGRAM(ADD);
+        INS_REG_DO(ADD, +);
+        goto dispatch;
+    }
+
+    do_add_b: {
+        CHECK_PROGRAM(ADD_B);
+        INS_IMM_DO(ADD_B, getNext, +);
+        goto dispatch;
+    }
+
+    do_add_w: {
+        CHECK_PROGRAM(ADD_W);
+        INS_IMM_DO(ADD_W, getNext2, +);
+        goto dispatch;
+    }
+
+    do_add_dw: {
+        CHECK_PROGRAM(ADD_DW);
+        INS_IMM_DO(ADD_DW, getNext4, +);
+        goto dispatch;
+    }
+
+    do_add_qw: {
+        CHECK_PROGRAM(ADD_QW);
+        INS_IMM_DO(ADD_QW, getNext8, +);
+        goto dispatch;
+    }
+
+    do_sub: {
+        CHECK_PROGRAM(SUB);
+        INS_REG_DO(SUB, -);
+        goto dispatch;
+    }
+
+    do_sub_b: {
+        CHECK_PROGRAM(SUB_B);
+        INS_IMM_DO(SUB_B, getNext, -);
+        goto dispatch;
+    }
+
+    do_sub_w: {
+        CHECK_PROGRAM(SUB_W);
+        INS_IMM_DO(SUB_W, getNext2, -);
+        goto dispatch;
+    }
+
+    do_sub_dw: {
+        CHECK_PROGRAM(SUB_DW);
+        INS_IMM_DO(SUB_DW, getNext4, -);
+        goto dispatch;
+    }
+
+    do_sub_qw: {
+        CHECK_PROGRAM(SUB_QW);
+        INS_IMM_DO(SUB_QW, getNext8, -);
+        goto dispatch;
+    }
+
+    do_mul: {
+        CHECK_PROGRAM(MUL);
+        INS_REG_DO(MUL, *);
+        goto dispatch;
+    }
+
+    do_mul_b: {
+        CHECK_PROGRAM(MUL_B);
+        INS_IMM_DO(MUL_B, getNext, *);
+        goto dispatch;
+    }
+
+    do_mul_w: {
+        CHECK_PROGRAM(MUL_W);
+        INS_IMM_DO(MUL_W, getNext2, *);
+        goto dispatch;
+    }
+
+    do_mul_dw: {
+        CHECK_PROGRAM(MUL_DW);
+        INS_IMM_DO(MUL_DW, getNext4, *);
+        goto dispatch;
+    }
+
+    do_mul_qw: {
+        CHECK_PROGRAM(MUL_QW);
+        INS_IMM_DO(MUL_QW, getNext8, *);
+    }
+
+    do_jmp: {
+        CHECK_PROGRAM(JMP);
 
         uint64_t pc = getNext8(vm->pc + INS_JMP_PC_OFFSET, program);
         vm->pc = pc;
@@ -313,11 +430,12 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    do_jnz:
-    {
-        CHECK_PROGRAM(JNZ)
+    do_jnz: {
+        CHECK_PROGRAM(JNZ);
 
-        if (vm->cstack.accumulator == 0) {
+        uint8_t reg = getNext(vm->pc + INS_JNZ_REG_OFFSET, program);
+
+        if (getCurrentCFrame(vm)->registers[reg] == 0) {
             vm->pc += INS_JNZ_WIDTH;
             goto dispatch;
         }
