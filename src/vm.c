@@ -24,8 +24,8 @@
     CTC uint64_t INS_##name##_DST_OFFSET = 1; \
     CTC uint64_t INS_##name##_SRC_OFFSET = 2;
 
-#define INS_IMM_LAYOUT(name, size) \
-    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + (size); \
+#define INS_IMM_LAYOUT(name) \
+    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + 8; \
     CTC uint64_t INS_##name##_DST_OFFSET = 1; \
     CTC uint64_t INS_##name##_IMM_OFFSET = 2;
 
@@ -41,9 +41,9 @@
     cf->registers[dst] op##= cf->registers[src]; \
     vm->pc += INS_##name##_WIDTH; \
 
-#define INS_IMM_DO(name, fetch_fn, op) \
+#define INS_IMM_DO(name, op) \
     uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
-    auto imm = fetch_fn(vm->pc + INS_##name##_IMM_OFFSET, program); \
+    auto imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, program); \
     LumiVMCFrame* cf = getCurrentCFrame(vm); \
     cf->registers[dst] op##= imm; \
     vm->pc += INS_##name##_WIDTH; \
@@ -72,29 +72,16 @@ CTC uint64_t INS_RET_WIDTH = 1 + 1;
 CTC uint64_t INS_RET_REG_OFFSET = 1;
 
 INS_REG_LAYOUT(MOV);
-
-INS_IMM_LAYOUT(LOAD_B, 1);
-INS_IMM_LAYOUT(LOAD_W, 2);
-INS_IMM_LAYOUT(LOAD_DW, 4);
-INS_IMM_LAYOUT(LOAD_QW, 8);
+INS_IMM_LAYOUT(LOAD);
 
 INS_REG_LAYOUT(ADD);
-INS_IMM_LAYOUT(ADD_B, 1);
-INS_IMM_LAYOUT(ADD_W, 2);
-INS_IMM_LAYOUT(ADD_DW, 4);
-INS_IMM_LAYOUT(ADD_QW, 8);
+INS_IMM_LAYOUT(ADDI);
 
 INS_REG_LAYOUT(SUB);
-INS_IMM_LAYOUT(SUB_B, 1);
-INS_IMM_LAYOUT(SUB_W, 2);
-INS_IMM_LAYOUT(SUB_DW, 4);
-INS_IMM_LAYOUT(SUB_QW, 8);
+INS_IMM_LAYOUT(SUBI);
 
 INS_REG_LAYOUT(MUL);
-INS_IMM_LAYOUT(MUL_B, 1);
-INS_IMM_LAYOUT(MUL_W, 2);
-INS_IMM_LAYOUT(MUL_DW, 4);
-INS_IMM_LAYOUT(MUL_QW, 8);
+INS_IMM_LAYOUT(MULI);
 
 CTC uint64_t INS_JMP_WIDTH = 1 + 8;
 CTC uint64_t INS_JMP_PC_OFFSET = 1;
@@ -201,29 +188,16 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         [OP_RET] = &&do_ret,
 
         [OP_MOV] = &&do_mov,
-
-        [OP_LOAD_B] = &&do_load_b,
-        [OP_LOAD_W] = &&do_load_w,
-        [OP_LOAD_DW] = &&do_load_dw,
-        [OP_LOAD_QW] = &&do_load_qw,
+        [OP_LOAD] = &&do_load,
 
         [OP_ADD] = &&do_add,
-        [OP_ADD_B] = &&do_add_b,
-        [OP_ADD_W] = &&do_add_w,
-        [OP_ADD_DW] = &&do_add_dw,
-        [OP_ADD_QW] = &&do_add_qw,
+        [OP_ADDI] = &&do_addi,
 
         [OP_SUB] = &&do_sub,
-        [OP_SUB_B] = &&do_sub_b,
-        [OP_SUB_W] = &&do_sub_w,
-        [OP_SUB_DW] = &&do_sub_dw,
-        [OP_SUB_QW] = &&do_sub_qw,
+        [OP_SUBI] = &&do_subi,
 
         [OP_MUL] = &&do_mul,
-        [OP_MUL_B] = &&do_mul_b,
-        [OP_MUL_W] = &&do_mul_w,
-        [OP_MUL_DW] = &&do_mul_dw,
-        [OP_MUL_QW] = &&do_mul_qw,
+        [OP_MULI] = &&do_muli,
 
         [OP_JMP] = &&do_jmp,
         [OP_JNZ] = &&do_jnz,
@@ -308,27 +282,9 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    do_load_b: {
-        CHECK_PROGRAM(LOAD_B);
-        INS_IMM_DO(LOAD_B, getNext,);
-        goto dispatch;
-    }
-
-    do_load_w: {
-        CHECK_PROGRAM(LOAD_W);
-        INS_IMM_DO(LOAD_W, getNext2,);
-        goto dispatch;
-    }
-
-    do_load_dw: {
-        CHECK_PROGRAM(LOAD_DW);
-        INS_IMM_DO(LOAD_DW, getNext4,);
-        goto dispatch;
-    }
-
-    do_load_qw: {
-        CHECK_PROGRAM(LOAD_QW);
-        INS_IMM_DO(LOAD_QW, getNext8,);
+    do_load: {
+        CHECK_PROGRAM(LOAD);
+        INS_IMM_DO(LOAD,);
         goto dispatch;
     }
 
@@ -338,27 +294,9 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    do_add_b: {
-        CHECK_PROGRAM(ADD_B);
-        INS_IMM_DO(ADD_B, getNext, +);
-        goto dispatch;
-    }
-
-    do_add_w: {
-        CHECK_PROGRAM(ADD_W);
-        INS_IMM_DO(ADD_W, getNext2, +);
-        goto dispatch;
-    }
-
-    do_add_dw: {
-        CHECK_PROGRAM(ADD_DW);
-        INS_IMM_DO(ADD_DW, getNext4, +);
-        goto dispatch;
-    }
-
-    do_add_qw: {
-        CHECK_PROGRAM(ADD_QW);
-        INS_IMM_DO(ADD_QW, getNext8, +);
+    do_addi: {
+        CHECK_PROGRAM(ADDI);
+        INS_IMM_DO(ADDI, +);
         goto dispatch;
     }
 
@@ -368,27 +306,9 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    do_sub_b: {
-        CHECK_PROGRAM(SUB_B);
-        INS_IMM_DO(SUB_B, getNext, -);
-        goto dispatch;
-    }
-
-    do_sub_w: {
-        CHECK_PROGRAM(SUB_W);
-        INS_IMM_DO(SUB_W, getNext2, -);
-        goto dispatch;
-    }
-
-    do_sub_dw: {
-        CHECK_PROGRAM(SUB_DW);
-        INS_IMM_DO(SUB_DW, getNext4, -);
-        goto dispatch;
-    }
-
-    do_sub_qw: {
-        CHECK_PROGRAM(SUB_QW);
-        INS_IMM_DO(SUB_QW, getNext8, -);
+    do_subi: {
+        CHECK_PROGRAM(SUBI);
+        INS_IMM_DO(SUBI, -);
         goto dispatch;
     }
 
@@ -398,27 +318,10 @@ int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    do_mul_b: {
-        CHECK_PROGRAM(MUL_B);
-        INS_IMM_DO(MUL_B, getNext, *);
+    do_muli: {
+        CHECK_PROGRAM(MULI);
+        INS_IMM_DO(MULI, *);
         goto dispatch;
-    }
-
-    do_mul_w: {
-        CHECK_PROGRAM(MUL_W);
-        INS_IMM_DO(MUL_W, getNext2, *);
-        goto dispatch;
-    }
-
-    do_mul_dw: {
-        CHECK_PROGRAM(MUL_DW);
-        INS_IMM_DO(MUL_DW, getNext4, *);
-        goto dispatch;
-    }
-
-    do_mul_qw: {
-        CHECK_PROGRAM(MUL_QW);
-        INS_IMM_DO(MUL_QW, getNext8, *);
     }
 
     do_jmp: {

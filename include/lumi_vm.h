@@ -39,30 +39,17 @@ typedef enum : uint8_t {
     OP_CALL = 0x08,
     OP_RET  = 0x09,
 
-    OP_MOV = 0x10,
+    OP_MOV  = 0x10,
+    OP_LOAD = 0x11,
 
-    OP_LOAD_B  = 0x11,
-    OP_LOAD_W  = 0x12,
-    OP_LOAD_DW = 0x13,
-    OP_LOAD_QW = 0x14,
+    OP_ADD  = 0x20,
+    OP_ADDI = 0x21,
 
-    OP_ADD     = 0x20,
-    OP_ADD_B  = 0x21,
-    OP_ADD_W  = 0x22,
-    OP_ADD_DW = 0x23,
-    OP_ADD_QW = 0x24,
+    OP_SUB  = 0x28,
+    OP_SUBI = 0x29,
 
-    OP_SUB     = 0x28,
-    OP_SUB_B  = 0x29,
-    OP_SUB_W  = 0x2A,
-    OP_SUB_DW = 0x2B,
-    OP_SUB_QW = 0x2C,
-
-    OP_MUL     = 0x30,
-    OP_MUL_B  = 0x31,
-    OP_MUL_W  = 0x32,
-    OP_MUL_DW = 0x33,
-    OP_MUL_QW = 0x34,
+    OP_MUL  = 0x30,
+    OP_MULI = 0x31,
 
     OP_JMP = 0x38,
     OP_JNZ = 0x39,
