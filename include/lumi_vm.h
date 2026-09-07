@@ -55,20 +55,21 @@ typedef enum : uint8_t {
     OP_JNZ = 0x39,
 } LumiVM_OpCode;
 
-typedef enum : int32_t {
-    EX_OKAY = 0x00000000,
-
-    EX_ABRUPT_END = 0x70000001,
-    EX_STACK_OF   = 0x70000002,
-    EX_ILL_INS    = 0x70000003,
-    EX_INV_INS    = 0x70000004,
-
-    EX_PROGRAM_ERR = 0x7FFFFFFE,
-    EX_STATE_ERR   = 0x7FFFFFFF,
+typedef enum : uint8_t {
+    EX_OKAY    = 0x00,
+    EX_SIG_ERR = 0x80,
 } LumiVM_ExCode;
+
+typedef enum : uint8_t {
+    SIG_VM_ERR,
+    SIG_PROG_ERR,
+    SIG_ILL,
+    SIG_SEGV_PC,
+    SIG_SEGV_SOF,
+} LumiVM_Signals;
 
 LumiVM* lumiCreateVM(void);
 void lumiDestroyVM(LumiVM* vm);
-int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size);
+uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size);
 
 #endif

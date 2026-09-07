@@ -60,9 +60,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    int32_t exit_code = lumiRunVM(vm, program, bytes_read);
+    uint8_t exit_code = lumiRunVM(vm, program, bytes_read);
 
-    printf("Exited with %" PRId32 "\nProgram Counter: 0x%016" PRIx64 "\n", exit_code, vm->pc);
+    printf("Exited with %u\nProgram Counter: 0x%016" PRIx64 "\n", exit_code, vm->pc);
 
     lumiDestroyVM(vm);
     free(program);
