@@ -95,9 +95,8 @@ INS_IMM_LAYOUT(MULI);
 CTC uint64_t INS_JMP_WIDTH = 1 + 8;
 CTC uint64_t INS_JMP_PC_OFFSET = 1;
 
-CTC uint64_t INS_JNZ_WIDTH = 1 + 1 + 8;
-CTC uint64_t INS_JNZ_REG_OFFSET = 1;
-CTC uint64_t INS_JNZ_PC_OFFSET = 2;
+CTC uint64_t INS_JMPR_WIDTH = 1 + 1;
+CTC uint64_t INS_JMPR_SRC_OFFSET = 1;
 
 static inline bool hasNext(uint64_t pc, uint64_t program_size, uint64_t bytes) {
     if (pc + bytes > program_size) return false;
@@ -209,7 +208,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         [OP_MULI] = &&do_muli,
 
         [OP_JMP] = &&do_jmp,
-        [OP_JNZ] = &&do_jnz,
+        [OP_JMPR] = &&do_jmpr,
     };
 
     dispatch: {
@@ -356,18 +355,11 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    do_jnz: {
-        CHECK_PROGRAM(JNZ);
+    do_jmpr: {
+        CHECK_PROGRAM(JMPR);
 
-        uint8_t reg = getNext(vm->pc + INS_JNZ_REG_OFFSET, program);
-
-        if (getCurrentCFrame(vm)->registers[reg] == 0) {
-            vm->pc += INS_JNZ_WIDTH;
-            goto dispatch;
-        }
-
-        uint64_t pc = getNext8(vm->pc + INS_JNZ_PC_OFFSET, program);
-        vm->pc = pc;
+        uint8_t src = getNext(vm->pc + INS_JMPR_SRC_OFFSET, program);
+        vm->pc = getCurrentCFrame(vm)->registers[src];
 
         goto dispatch;
     }
