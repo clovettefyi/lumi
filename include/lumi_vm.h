@@ -36,8 +36,9 @@ typedef enum : uint8_t {
     OP_NOP  = 0x00,
     OP_HALT = 0X01,
 
-    OP_CALL = 0x08,
-    OP_RET  = 0x09,
+    OP_CALL  = 0x08,
+    OP_CALLR = 0x09,
+    OP_RET   = 0x0A,
 
     OP_MOV  = 0x10,
     OP_LOAD = 0x11,
@@ -52,7 +53,6 @@ typedef enum : uint8_t {
     OP_MULI = 0x31,
 
     OP_JMP  = 0x38,
-    OP_JMPR = 0x39,
 } LumiVM_OpCode;
 
 typedef enum : uint8_t {

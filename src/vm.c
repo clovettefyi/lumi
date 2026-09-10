@@ -13,10 +13,6 @@
 #include <string.h>
 #include <stddef.h>
 
-/*
- -- MACROS --
-*/
-
 #define CTC constexpr static
 
 #define INS_REG_LAYOUT(name) \
@@ -30,27 +26,6 @@
     CTC uint64_t INS_##name##_DST_OFFSET = 1; \
     CTC uint64_t INS_##name##_SRC_OFFSET = 2; \
     CTC uint64_t INS_##name##_IMM_OFFSET = 3;
-
-#define CHECK_PROGRAM(name) \
-    if (!hasNext(vm->pc, program_size, INS_##name##_WIDTH)) { \
-        return EX_SIG_ERR + SIG_SEGV_PC; \
-    }
-
-#define INS_REG_DO(name, op) \
-    uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
-    uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, program); \
-    uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, program); \
-    LumiVMCFrame* cf = getCurrentCFrame(vm); \
-    cf->registers[dst] = cf->registers[src1] op cf->registers[src2]; \
-    vm->pc += INS_##name##_WIDTH; \
-
-#define INS_IMM_DO(name, op) \
-    uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
-    uint8_t src = getNext(vm->pc + INS_##name##_SRC_OFFSET, program); \
-    auto imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, program); \
-    LumiVMCFrame* cf = getCurrentCFrame(vm); \
-    cf->registers[dst] = cf->registers[src] op imm; \
-    vm->pc += INS_##name##_WIDTH;
 
 /*
  -- VM CONSTANTS --
@@ -71,6 +46,11 @@ CTC uint64_t INS_CALL_WIDTH = 1 + 1 + 1 + 8;
 CTC uint64_t INS_CALL_SREG_OFFSET = 1;
 CTC uint64_t INS_CALL_EREG_OFFSET = 2;
 CTC uint64_t INS_CALL_PC_OFFSET = 3;
+
+CTC uint64_t INS_CALLR_WIDTH = 1 + 1 + 1 + 1;
+CTC uint64_t INS_CALLR_SREG_OFFSET = 1;
+CTC uint64_t INS_CALLR_EREG_OFFSET = 2;
+CTC uint64_t INS_CALLR_REG_OFFSET = 3;
 
 CTC uint64_t INS_RET_WIDTH = 1 + 1;
 CTC uint64_t INS_RET_REG_OFFSET = 1;
@@ -95,8 +75,9 @@ INS_IMM_LAYOUT(MULI);
 CTC uint64_t INS_JMP_WIDTH = 1 + 8;
 CTC uint64_t INS_JMP_PC_OFFSET = 1;
 
-CTC uint64_t INS_JMPR_WIDTH = 1 + 1;
-CTC uint64_t INS_JMPR_SRC_OFFSET = 1;
+/*
+ -- HELPER FUNCTIONS --
+*/
 
 static inline bool hasNext(uint64_t pc, uint64_t program_size, uint64_t bytes) {
     if (pc + bytes > program_size) return false;
@@ -133,6 +114,10 @@ static inline LumiVMCFrame* getCurrentCFrame(LumiVM* vm) {
     return vm->cstack.cframes + vm->cstack.fp;
 }
 
+/*
+ -- CREATE VM --
+*/
+
 LumiVM* lumiCreateVM(void) {
     LumiVM* vm = nullptr;
     LumiVMCFrame* cframes = nullptr;
@@ -166,6 +151,10 @@ LumiVM* lumiCreateVM(void) {
     return nullptr;
 }
 
+/*
+ -- DESTROY VM --
+*/
+
 void lumiDestroyVM(LumiVM* vm) {
     if (vm == nullptr) {
         return;
@@ -175,6 +164,10 @@ void lumiDestroyVM(LumiVM* vm) {
     free(vm->cstack.cframes);
     free(vm);
 }
+
+/*
+ -- RUN VM --
+*/
 
 __attribute__((noinline))
 uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
@@ -193,6 +186,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         [OP_HALT] = &&do_halt,
 
         [OP_CALL] = &&do_call,
+        [OP_CALLR] = &&do_callr,
         [OP_RET] = &&do_ret,
 
         [OP_MOV] = &&do_mov,
@@ -208,8 +202,12 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         [OP_MULI] = &&do_muli,
 
         [OP_JMP] = &&do_jmp,
-        [OP_JMPR] = &&do_jmpr,
     };
+
+    #define CHECK_PROGRAM(name) \
+        if (!hasNext(vm->pc, program_size, INS_##name##_WIDTH)) { \
+            return EX_SIG_ERR + SIG_SEGV_PC; \
+        }
 
     dispatch: {
         if (vm->pc >= program_size) {
@@ -218,6 +216,10 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
          goto *dispatch_table[program[vm->pc]];
     }
+
+    /*
+     -- INSTRUCTIONS --
+    */
 
     do_invalid: {
         return EX_SIG_ERR + SIG_ILL;
@@ -249,6 +251,41 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
         uint64_t jmp_pc = getNext8(vm->pc + INS_CALL_PC_OFFSET, program);
         uint64_t ret_pc = vm->pc + INS_CALL_WIDTH;
+
+        LumiVMCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
+        LumiVMCFrame* callee_cf = getCurrentCFrame(vm);
+
+        callee_cf->pc = ret_pc;
+
+        size_t reg_count = end_reg - start_reg + 1;
+
+        uint64_t* out_regs = caller_cf->registers + start_reg;
+        uint64_t* in_regs = callee_cf->registers;
+
+        memcpy(in_regs, out_regs, reg_count * sizeof(uint64_t));
+
+        vm->pc = jmp_pc;
+
+        goto dispatch;
+    }
+
+    do_callr: {
+        CHECK_PROGRAM(CALLR);
+
+        if (vm->cstack.fp + 1 >= CFRAME_COUNT) {
+            return EX_SIG_ERR + SIG_SEGV_SOF;
+        }
+
+        uint8_t start_reg = getNext(vm->pc + INS_CALLR_SREG_OFFSET, program);
+        uint8_t end_reg = getNext(vm->pc + INS_CALLR_EREG_OFFSET, program);
+
+        if (start_reg > end_reg) {
+            return EX_SIG_ERR + SIG_ILL;
+        }
+
+        uint8_t reg = getNext(vm->pc + INS_CALLR_REG_OFFSET, program);
+        uint64_t jmp_pc = getCurrentCFrame(vm)->registers[reg];
+        uint64_t ret_pc = vm->pc + INS_CALLR_WIDTH;
 
         LumiVMCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
         LumiVMCFrame* callee_cf = getCurrentCFrame(vm);
@@ -310,6 +347,22 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
+    #define INS_REG_DO(name, op) \
+        uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
+        uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, program); \
+        uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, program); \
+        LumiVMCFrame* cf = getCurrentCFrame(vm); \
+        cf->registers[dst] = cf->registers[src1] op cf->registers[src2]; \
+        vm->pc += INS_##name##_WIDTH; \
+
+    #define INS_IMM_DO(name, op) \
+        uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
+        uint8_t src = getNext(vm->pc + INS_##name##_SRC_OFFSET, program); \
+        auto imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, program); \
+        LumiVMCFrame* cf = getCurrentCFrame(vm); \
+        cf->registers[dst] = cf->registers[src] op imm; \
+        vm->pc += INS_##name##_WIDTH;
+
     do_add: {
         CHECK_PROGRAM(ADD);
         INS_REG_DO(ADD, +);
@@ -354,13 +407,4 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
         goto dispatch;
     }
-
-    do_jmpr: {
-        CHECK_PROGRAM(JMPR);
-
-        uint8_t src = getNext(vm->pc + INS_JMPR_SRC_OFFSET, program);
-        vm->pc = getCurrentCFrame(vm)->registers[src];
-
-        goto dispatch;
-    }
-}
+ }
