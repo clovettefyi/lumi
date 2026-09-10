@@ -52,7 +52,25 @@ typedef enum : uint8_t {
     OP_MUL  = 0x30,
     OP_MULI = 0x31,
 
-    OP_JMP  = 0x38,
+    OP_JMP = 0x38,
+
+    OP_BEQ  = 0x39,
+    OP_BEQI = 0x3A,
+
+    OP_BNE  = 0x3B,
+    OP_BNEI = 0x3C,
+
+    OP_BGT  = 0x3D,
+    OP_BGTI = 0x3E,
+
+    OP_BLT  = 0x3F,
+    OP_BLTI = 0x40,
+
+    OP_BGE  = 0x41,
+    OP_BGEI = 0x42,
+
+    OP_BLE  = 0x43,
+    OP_BLEI = 0x44,
 } LumiVM_OpCode;
 
 typedef enum : uint8_t {

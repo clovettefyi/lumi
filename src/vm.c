@@ -15,18 +15,6 @@
 
 #define CTC constexpr static
 
-#define INS_REG_LAYOUT(name) \
-    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + 1 +1; \
-    CTC uint64_t INS_##name##_DST_OFFSET = 1; \
-    CTC uint64_t INS_##name##_SRC1_OFFSET = 2; \
-    CTC uint64_t INS_##name##_SRC2_OFFSET = 3;
-
-#define INS_IMM_LAYOUT(name) \
-    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + 1 + 8; \
-    CTC uint64_t INS_##name##_DST_OFFSET = 1; \
-    CTC uint64_t INS_##name##_SRC_OFFSET = 2; \
-    CTC uint64_t INS_##name##_IMM_OFFSET = 3;
-
 /*
  -- VM CONSTANTS --
 */
@@ -63,17 +51,59 @@ CTC uint64_t INS_LOAD_WIDTH = 1 + 1 + 8;
 CTC uint64_t INS_LOAD_DST_OFFSET = 1;
 CTC uint64_t INS_LOAD_IMM_OFFSET = 2;
 
-INS_REG_LAYOUT(ADD);
-INS_IMM_LAYOUT(ADDI);
+#define INS_ARITH_REG_LAYOUT(name) \
+    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + 1 +1; \
+    CTC uint64_t INS_##name##_DST_OFFSET = 1; \
+    CTC uint64_t INS_##name##_SRC1_OFFSET = 2; \
+    CTC uint64_t INS_##name##_SRC2_OFFSET = 3;
 
-INS_REG_LAYOUT(SUB);
-INS_IMM_LAYOUT(SUBI);
+#define INS_ARITH_IMM_LAYOUT(name) \
+    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + 1 + 8; \
+    CTC uint64_t INS_##name##_DST_OFFSET = 1; \
+    CTC uint64_t INS_##name##_SRC_OFFSET = 2; \
+    CTC uint64_t INS_##name##_IMM_OFFSET = 3;
 
-INS_REG_LAYOUT(MUL);
-INS_IMM_LAYOUT(MULI);
+INS_ARITH_REG_LAYOUT(ADD);
+INS_ARITH_IMM_LAYOUT(ADDI);
+
+INS_ARITH_REG_LAYOUT(SUB);
+INS_ARITH_IMM_LAYOUT(SUBI);
+
+INS_ARITH_REG_LAYOUT(MUL);
+INS_ARITH_IMM_LAYOUT(MULI);
 
 CTC uint64_t INS_JMP_WIDTH = 1 + 8;
 CTC uint64_t INS_JMP_PC_OFFSET = 1;
+
+#define INS_BRANCH_REG_LAYOUT(name) \
+    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + 1 + 8; \
+    CTC uint64_t INS_##name##_SRC1_OFFSET = 1; \
+    CTC uint64_t INS_##name##_SRC2_OFFSET = 2; \
+    CTC uint64_t INS_##name##_OFFSET_OFFSET = 3;
+
+#define INS_BRANCH_IMM_LAYOUT(name) \
+    CTC uint64_t INS_##name##_WIDTH = 1 + 1 + 8 + 8; \
+    CTC uint64_t INS_##name##_SRC_OFFSET = 1; \
+    CTC uint64_t INS_##name##_IMM_OFFSET = 2; \
+    CTC uint64_t INS_##name##_OFFSET_OFFSET = 10;
+
+INS_BRANCH_REG_LAYOUT(BEQ);
+INS_BRANCH_IMM_LAYOUT(BEQI);
+
+INS_BRANCH_REG_LAYOUT(BNE);
+INS_BRANCH_IMM_LAYOUT(BNEI);
+
+INS_BRANCH_REG_LAYOUT(BGT);
+INS_BRANCH_IMM_LAYOUT(BGTI);
+
+INS_BRANCH_REG_LAYOUT(BLT);
+INS_BRANCH_IMM_LAYOUT(BLTI);
+
+INS_BRANCH_REG_LAYOUT(BGE);
+INS_BRANCH_IMM_LAYOUT(BGEI);
+
+INS_BRANCH_REG_LAYOUT(BLE);
+INS_BRANCH_IMM_LAYOUT(BLEI);
 
 /*
  -- HELPER FUNCTIONS --
@@ -202,6 +232,24 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         [OP_MULI] = &&do_muli,
 
         [OP_JMP] = &&do_jmp,
+
+        [OP_BEQ] = &&do_beq,
+        [OP_BEQI] = &&do_beqi,
+
+        [OP_BNE] = &&do_bne,
+        [OP_BNEI] = &&do_bnei,
+
+        [OP_BGT] = &&do_bgt,
+        [OP_BGTI] = &&do_bgti,
+
+        [OP_BLT] = &&do_blt,
+        [OP_BLTI] = &&do_blti,
+
+        [OP_BGE] = &&do_bge,
+        [OP_BGEI] = &&do_bgei,
+
+        [OP_BLE] = &&do_ble,
+        [OP_BLEI] = &&do_blei,
     };
 
     #define CHECK_PROGRAM(name) \
@@ -347,7 +395,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         goto dispatch;
     }
 
-    #define INS_REG_DO(name, op) \
+    #define INS_ARITH_REG_DO(name, op) \
         uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
         uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, program); \
@@ -355,47 +403,47 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         cf->registers[dst] = cf->registers[src1] op cf->registers[src2]; \
         vm->pc += INS_##name##_WIDTH; \
 
-    #define INS_IMM_DO(name, op) \
+    #define INS_ARITH_IMM_DO(name, op) \
         uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
         uint8_t src = getNext(vm->pc + INS_##name##_SRC_OFFSET, program); \
-        auto imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, program); \
+        uint64_t imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, program); \
         LumiVMCFrame* cf = getCurrentCFrame(vm); \
         cf->registers[dst] = cf->registers[src] op imm; \
         vm->pc += INS_##name##_WIDTH;
 
     do_add: {
         CHECK_PROGRAM(ADD);
-        INS_REG_DO(ADD, +);
+        INS_ARITH_REG_DO(ADD, +);
         goto dispatch;
     }
 
     do_addi: {
         CHECK_PROGRAM(ADDI);
-        INS_IMM_DO(ADDI, +);
+        INS_ARITH_IMM_DO(ADDI, +);
         goto dispatch;
     }
 
     do_sub: {
         CHECK_PROGRAM(SUB);
-        INS_REG_DO(SUB, -);
+        INS_ARITH_REG_DO(SUB, -);
         goto dispatch;
     }
 
     do_subi: {
         CHECK_PROGRAM(SUBI);
-        INS_IMM_DO(SUBI, -);
+        INS_ARITH_IMM_DO(SUBI, -);
         goto dispatch;
     }
 
     do_mul: {
         CHECK_PROGRAM(MUL);
-        INS_REG_DO(MUL, *);
+        INS_ARITH_REG_DO(MUL, *);
         goto dispatch;
     }
 
     do_muli: {
         CHECK_PROGRAM(MULI);
-        INS_IMM_DO(MULI, *);
+        INS_ARITH_IMM_DO(MULI, *);
         goto dispatch;
     }
 
@@ -405,6 +453,93 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         uint64_t pc = getNext8(vm->pc + INS_JMP_PC_OFFSET, program);
         vm->pc = pc;
 
+        goto dispatch;
+    }
+
+    #define INS_BRANCH_REG_DO(name, comparitor) \
+        uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, program); \
+        uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, program); \
+        int64_t offset = getNext8(vm->pc + INS_##name##_OFFSET_OFFSET, program); \
+        LumiVMCFrame* cf = getCurrentCFrame(vm); \
+        vm->pc += INS_##name##_WIDTH; \
+        if (cf->registers[src1] comparitor cf->registers[src2]) { vm->pc += offset; }
+
+    #define INS_BRANCH_IMM_DO(name, comparitor) \
+        uint8_t src1 = getNext(vm->pc + INS_##name##_SRC_OFFSET, program); \
+        uint64_t imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, program); \
+        int64_t offset = getNext8(vm->pc + INS_##name##_OFFSET_OFFSET, program); \
+        vm->pc += INS_##name##_WIDTH; \
+        if (getCurrentCFrame(vm)->registers[src1] comparitor imm) { vm->pc += offset; }
+
+    do_beq: {
+        CHECK_PROGRAM(BEQ);
+        INS_BRANCH_REG_DO(BEQ, ==);
+        goto dispatch;
+    }
+
+    do_beqi: {
+        CHECK_PROGRAM(BEQI);
+        INS_BRANCH_IMM_DO(BEQI, ==);
+        goto dispatch;
+    }
+
+    do_bne: {
+        CHECK_PROGRAM(BNE);
+        INS_BRANCH_REG_DO(BNE, !=);
+        goto dispatch;
+    }
+
+    do_bnei: {
+        CHECK_PROGRAM(BNEI);
+        INS_BRANCH_IMM_DO(BNEI, !=);
+        goto dispatch;
+    }
+
+    do_bgt: {
+        CHECK_PROGRAM(BGT);
+        INS_BRANCH_REG_DO(BGT, >);
+        goto dispatch;
+    }
+
+    do_bgti: {
+        CHECK_PROGRAM(BGTI);
+        INS_BRANCH_IMM_DO(BGTI, >);
+        goto dispatch;
+    }
+
+    do_blt: {
+        CHECK_PROGRAM(BLT);
+        INS_BRANCH_REG_DO(BLT, <);
+        goto dispatch;
+    }
+
+    do_blti: {
+        CHECK_PROGRAM(BLTI);
+        INS_BRANCH_IMM_DO(BLTI, <);
+        goto dispatch;
+    }
+
+    do_bge: {
+        CHECK_PROGRAM(BGE);
+        INS_BRANCH_REG_DO(BGE, >=);
+        goto dispatch;
+    }
+
+    do_bgei: {
+        CHECK_PROGRAM(BGEI);
+        INS_BRANCH_IMM_DO(BGEI, >=);
+        goto dispatch;
+    }
+
+    do_ble: {
+        CHECK_PROGRAM(BLE);
+        INS_BRANCH_REG_DO(BLE, <=);
+        goto dispatch;
+    }
+
+    do_blei: {
+        CHECK_PROGRAM(BLEI);
+        INS_BRANCH_IMM_DO(BLEI, <=);
         goto dispatch;
     }
  }
