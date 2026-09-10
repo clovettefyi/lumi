@@ -21,7 +21,6 @@ typedef struct {
     struct {
         LumiVMCFrame* cframes;
         uint64_t fp;
-        uint64_t accumulator;
     } cstack;
 
     struct {
@@ -37,56 +36,58 @@ typedef enum : uint8_t {
     OP_NOP  = 0x00,
     OP_HALT = 0X01,
 
-    OP_CALL = 0x08,
-    OP_RET  = 0x09,
+    OP_CALL  = 0x08,
+    OP_CALLR = 0x09,
+    OP_RET   = 0x0A,
 
-    OP_LOAD     = 0x10,
-    OP_LOADI_B  = 0x11,
-    OP_LOADI_W  = 0x12,
-    OP_LOADI_DW = 0x13,
-    OP_LOADI_QW = 0x14,
+    OP_MOV  = 0x10,
+    OP_LOAD = 0x11,
 
-    OP_STR = 0x18,
+    OP_ADD  = 0x20,
+    OP_ADDI = 0x21,
 
-    OP_ADD     = 0x20,
-    OP_ADDI_B  = 0x21,
-    OP_ADDI_W  = 0x22,
-    OP_ADDI_DW = 0x23,
-    OP_ADDI_QW = 0x24,
+    OP_SUB  = 0x28,
+    OP_SUBI = 0x29,
 
-    OP_SUB     = 0x28,
-    OP_SUBI_B  = 0x29,
-    OP_SUBI_W  = 0x2A,
-    OP_SUBI_DW = 0x2B,
-    OP_SUBI_QW = 0x2C,
-
-    OP_MUL     = 0x30,
-    OP_MULI_B  = 0x31,
-    OP_MULI_W  = 0x32,
-    OP_MULI_DW = 0x33,
-    OP_MULI_QW = 0x34,
+    OP_MUL  = 0x30,
+    OP_MULI = 0x31,
 
     OP_JMP = 0x38,
-    OP_JNZ = 0x39,
+
+    OP_BEQ  = 0x39,
+    OP_BEQI = 0x3A,
+
+    OP_BNE  = 0x3B,
+    OP_BNEI = 0x3C,
+
+    OP_BGT  = 0x3D,
+    OP_BGTI = 0x3E,
+
+    OP_BLT  = 0x3F,
+    OP_BLTI = 0x40,
+
+    OP_BGE  = 0x41,
+    OP_BGEI = 0x42,
+
+    OP_BLE  = 0x43,
+    OP_BLEI = 0x44,
 } LumiVM_OpCode;
 
-typedef enum : int32_t {
-    EX_OKAY = 0x00000000,
-
-    EX_ABRUPT_END = 0x70000001,
-    EX_STACK_OF   = 0x70000002,
-    EX_ILL_INS    = 0x70000003,
-    EX_INV_INS    = 0x70000004,
-
-    EX_PROGRAM_ERR = 0x7FFFFFFE,
-    EX_STATE_ERR   = 0x7FFFFFFF,
+typedef enum : uint8_t {
+    EX_OKAY    = 0x00,
+    EX_SIG_ERR = 0x80,
 } LumiVM_ExCode;
+
+typedef enum : uint8_t {
+    SIG_VM_ERR,
+    SIG_PROG_ERR,
+    SIG_ILL,
+    SIG_SEGV_PC,
+    SIG_SEGV_SOF,
+} LumiVM_Signals;
 
 LumiVM* lumiCreateVM(void);
 void lumiDestroyVM(LumiVM* vm);
-
-uint64_t lumiVMGetAccumulator(LumiVM* vm);
-
-int32_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size);
+uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size);
 
 #endif

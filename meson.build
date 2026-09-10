@@ -12,7 +12,8 @@ include_dir = include_directories('include')
 
 sources = [
     'src/lumi.c',
-    'src/vm.c'
+    'src/vm.c',
+    'src/as.c'
 ]
 
 args = [
@@ -21,7 +22,8 @@ args = [
     '-Wpedantic',
     '-Wno-gnu-designator',
     '-Wno-gnu-label-as-value',
-    '-Wno-override-init'
+    '-Wno-override-init',
+    '-Wno-extra-semi'
 ]
 
 executable(
