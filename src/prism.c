@@ -148,7 +148,7 @@ static inline PrismCFrame* getCurrentCFrame(PrismVM* vm) {
  -- CREATE VM --
 */
 
-PrismVM* prismCreateVM(void) {
+PrismVM* prismCreate(uint8_t* program, uint64_t program_size) {
     PrismVM* vm = nullptr;
     PrismCFrame* cframes = nullptr;
     uint8_t* data = nullptr;
@@ -170,6 +170,8 @@ PrismVM* prismCreateVM(void) {
 
     vm->cstack.cframes = cframes;
     vm->dstack.data = data;
+    vm->program = program;
+    vm->program_size = program_size;
 
     return vm;
 
@@ -185,7 +187,7 @@ PrismVM* prismCreateVM(void) {
  -- DESTROY VM --
 */
 
-void prismDestroyVM(PrismVM* vm) {
+void prismDestroy(PrismVM* vm) {
     if (vm == nullptr) {
         return;
     }
@@ -200,12 +202,12 @@ void prismDestroyVM(PrismVM* vm) {
 */
 
 __attribute__((noinline))
-uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
+uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     if (vm == nullptr) {
         return PRISM_EX_SIG_ERR + PRISM_SIG_VM_ERR;
     }
 
-    if (program == nullptr) {
+    if (vm->program == nullptr) {
         return PRISM_EX_SIG_ERR + PRISM_SIG_PROG_ERR;
     }
 
@@ -253,16 +255,20 @@ uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
     };
 
     #define CHECK_PROGRAM(name) \
-        if (!hasNext(vm->pc, program_size, INS_##name##_WIDTH)) { \
+        if (!hasNext(vm->pc, vm->program_size, INS_##name##_WIDTH)) { \
             return PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_PC; \
         }
 
     dispatch: {
-        if (vm->pc >= program_size) {
+        if (vm->pc >= vm->program_size) {
             return PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_PC;
         }
 
-         goto *dispatch_table[program[vm->pc]];
+        if (step-- == 0) {
+            return PRISM_EX_OKAY;
+        }
+
+         goto *dispatch_table[vm->program[vm->pc]];
     }
 
     /*
@@ -290,14 +296,14 @@ uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
             return PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF;
         }
 
-        uint8_t start_reg = getNext(vm->pc + INS_CALL_SREG_OFFSET, program);
-        uint8_t end_reg = getNext(vm->pc + INS_CALL_EREG_OFFSET, program);
+        uint8_t start_reg = getNext(vm->pc + INS_CALL_SREG_OFFSET, vm->program);
+        uint8_t end_reg = getNext(vm->pc + INS_CALL_EREG_OFFSET, vm->program);
 
         if (start_reg > end_reg) {
             return PRISM_EX_SIG_ERR + PRISM_SIG_ILL;
         }
 
-        uint64_t jmp_pc = getNext8(vm->pc + INS_CALL_PC_OFFSET, program);
+        uint64_t jmp_pc = getNext8(vm->pc + INS_CALL_PC_OFFSET, vm->program);
         uint64_t ret_pc = vm->pc + INS_CALL_WIDTH;
 
         PrismCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
@@ -324,14 +330,14 @@ uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
             return PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF;
         }
 
-        uint8_t start_reg = getNext(vm->pc + INS_CALLR_SREG_OFFSET, program);
-        uint8_t end_reg = getNext(vm->pc + INS_CALLR_EREG_OFFSET, program);
+        uint8_t start_reg = getNext(vm->pc + INS_CALLR_SREG_OFFSET, vm->program);
+        uint8_t end_reg = getNext(vm->pc + INS_CALLR_EREG_OFFSET, vm->program);
 
         if (start_reg > end_reg) {
             return PRISM_EX_SIG_ERR + PRISM_SIG_ILL;
         }
 
-        uint8_t reg = getNext(vm->pc + INS_CALLR_REG_OFFSET, program);
+        uint8_t reg = getNext(vm->pc + INS_CALLR_REG_OFFSET, vm->program);
         uint64_t jmp_pc = getCurrentCFrame(vm)->registers[reg];
         uint64_t ret_pc = vm->pc + INS_CALLR_WIDTH;
 
@@ -359,7 +365,7 @@ uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
 
         CHECK_PROGRAM(RET);
 
-        uint64_t* ret_reg = getCurrentCFrame(vm)->registers + getNext(vm->pc + INS_RET_REG_OFFSET, program);
+        uint64_t* ret_reg = getCurrentCFrame(vm)->registers + getNext(vm->pc + INS_RET_REG_OFFSET, vm->program);
 
         vm->pc = getCurrentCFrame(vm)->pc;
         vm->cstack.fp--;
@@ -372,8 +378,8 @@ uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
     do_mov: {
         CHECK_PROGRAM(MOV);
 
-        uint8_t dst = getNext(vm->pc + INS_MOV_DST_OFFSET, program);
-        uint8_t src = getNext(vm->pc + INS_MOV_SRC_OFFSET, program);
+        uint8_t dst = getNext(vm->pc + INS_MOV_DST_OFFSET, vm->program);
+        uint8_t src = getNext(vm->pc + INS_MOV_SRC_OFFSET, vm->program);
         PrismCFrame* cf = getCurrentCFrame(vm);
 
         cf->registers[dst] = cf->registers[src];
@@ -385,8 +391,8 @@ uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
     do_load: {
         CHECK_PROGRAM(LOAD);
 
-        uint8_t dst = getNext(vm->pc + INS_LOAD_DST_OFFSET, program);
-        uint64_t imm = getNext8(vm->pc + INS_LOAD_IMM_OFFSET, program);
+        uint8_t dst = getNext(vm->pc + INS_LOAD_DST_OFFSET, vm->program);
+        uint64_t imm = getNext8(vm->pc + INS_LOAD_IMM_OFFSET, vm->program);
         PrismCFrame* cf = getCurrentCFrame(vm);
 
         cf->registers[dst] = imm;
@@ -396,17 +402,17 @@ uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
     }
 
     #define INS_ARITH_REG_DO(name, op) \
-        uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
-        uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, program); \
-        uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, program); \
+        uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, vm->program); \
+        uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, vm->program); \
+        uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, vm->program); \
         PrismCFrame* cf = getCurrentCFrame(vm); \
         cf->registers[dst] = cf->registers[src1] op cf->registers[src2]; \
         vm->pc += INS_##name##_WIDTH; \
 
     #define INS_ARITH_IMM_DO(name, op) \
-        uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
-        uint8_t src = getNext(vm->pc + INS_##name##_SRC_OFFSET, program); \
-        uint64_t imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, program); \
+        uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, vm->program); \
+        uint8_t src = getNext(vm->pc + INS_##name##_SRC_OFFSET, vm->program); \
+        uint64_t imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, vm->program); \
         PrismCFrame* cf = getCurrentCFrame(vm); \
         cf->registers[dst] = cf->registers[src] op imm; \
         vm->pc += INS_##name##_WIDTH;
@@ -450,24 +456,24 @@ uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
     do_jmp: {
         CHECK_PROGRAM(JMP);
 
-        uint64_t pc = getNext8(vm->pc + INS_JMP_PC_OFFSET, program);
+        uint64_t pc = getNext8(vm->pc + INS_JMP_PC_OFFSET, vm->program);
         vm->pc = pc;
 
         goto dispatch;
     }
 
     #define INS_BRANCH_REG_DO(name, comparitor) \
-        uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, program); \
-        uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, program); \
-        int64_t offset = getNext8(vm->pc + INS_##name##_OFFSET_OFFSET, program); \
+        uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, vm->program); \
+        uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, vm->program); \
+        int64_t offset = getNext8(vm->pc + INS_##name##_OFFSET_OFFSET, vm->program); \
         PrismCFrame* cf = getCurrentCFrame(vm); \
         vm->pc += INS_##name##_WIDTH; \
         if (cf->registers[src1] comparitor cf->registers[src2]) { vm->pc += offset; }
 
     #define INS_BRANCH_IMM_DO(name, comparitor) \
-        uint8_t src1 = getNext(vm->pc + INS_##name##_SRC_OFFSET, program); \
-        uint64_t imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, program); \
-        int64_t offset = getNext8(vm->pc + INS_##name##_OFFSET_OFFSET, program); \
+        uint8_t src1 = getNext(vm->pc + INS_##name##_SRC_OFFSET, vm->program); \
+        uint64_t imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, vm->program); \
+        int64_t offset = getNext8(vm->pc + INS_##name##_OFFSET_OFFSET, vm->program); \
         vm->pc += INS_##name##_WIDTH; \
         if (getCurrentCFrame(vm)->registers[src1] comparitor imm) { vm->pc += offset; }
 

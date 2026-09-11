@@ -53,18 +53,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    PrismVM* vm = prismCreateVM();
+    PrismVM* vm = prismCreate(program, bytes_read);
     if (vm == nullptr) {
         printf("Failed to create VM\n");
         free(program);
         return 1;
     }
 
-    uint8_t exit_code = prismRunVM(vm, program, bytes_read);
+    uint8_t exit_code = prismStepForward(vm, UINT64_MAX);
 
     printf("Exited with %u\nProgram Counter: 0x%016" PRIx64 "\n", exit_code, vm->pc);
 
-    prismDestroyVM(vm);
+    prismDestroy(vm);
     free(program);
 
     return 0;

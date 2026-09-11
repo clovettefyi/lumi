@@ -29,6 +29,8 @@ typedef struct {
         uint64_t bp;
     } dstack;
 
+    uint8_t* program;
+    uint64_t program_size;
     uint64_t pc;
 } PrismVM;
 
@@ -86,8 +88,8 @@ typedef enum : uint8_t {
     PRISM_SIG_SEGV_SOF,
 } PrismSignals;
 
-PrismVM* prismCreateVM(void);
-void prismDestroyVM(PrismVM* vm);
-uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size);
+PrismVM* prismCreate(uint8_t* program, uint64_t program_size);
+void prismDestroy(PrismVM* vm);
+uint8_t prismStepForward(PrismVM* vm, uint64_t step);
 
 #endif
