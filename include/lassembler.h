@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org.
  */
 
-#ifndef LUMI_AS_H
-#define LUMI_AS_H
+#ifndef LASSEMBLER_H
+#define LASSEMBLER_H
 
 #endif

@@ -12,8 +12,8 @@ include_dir = include_directories('include')
 
 sources = [
     'src/lumi.c',
-    'src/vm.c',
-    'src/as.c'
+    'src/prism.c',
+    'src/assembler.c'
 ]
 
 args = [

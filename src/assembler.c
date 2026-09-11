@@ -6,4 +6,4 @@
  * file, You can obtain one at https://mozilla.org.
  */
 
-#include "lumi_as.h"
+#include "lassembler.h"

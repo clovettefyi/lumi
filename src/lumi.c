@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org.
  */
 
-#include "lumi_vm.h"
+#include "lprism.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -53,18 +53,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    LumiVM* vm = lumiCreateVM();
+    PrismVM* vm = prismCreateVM();
     if (vm == nullptr) {
         printf("Failed to create VM\n");
         free(program);
         return 1;
     }
 
-    uint8_t exit_code = lumiRunVM(vm, program, bytes_read);
+    uint8_t exit_code = prismRunVM(vm, program, bytes_read);
 
     printf("Exited with %u\nProgram Counter: 0x%016" PRIx64 "\n", exit_code, vm->pc);
 
-    lumiDestroyVM(vm);
+    prismDestroyVM(vm);
     free(program);
 
     return 0;

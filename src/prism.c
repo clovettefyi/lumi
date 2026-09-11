@@ -6,7 +6,7 @@
  * file, You can obtain one at https://mozilla.org.
  */
 
-#include "lumi_vm.h"
+#include "lprism.h"
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -136,11 +136,11 @@ static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
     return val;
 }
 
-static inline LumiVMCFrame* getCFrame(LumiVM* vm, uint64_t fp) {
+static inline PrismCFrame* getCFrame(PrismVM* vm, uint64_t fp) {
     return vm->cstack.cframes + fp;
 }
 
-static inline LumiVMCFrame* getCurrentCFrame(LumiVM* vm) {
+static inline PrismCFrame* getCurrentCFrame(PrismVM* vm) {
     return vm->cstack.cframes + vm->cstack.fp;
 }
 
@@ -148,21 +148,20 @@ static inline LumiVMCFrame* getCurrentCFrame(LumiVM* vm) {
  -- CREATE VM --
 */
 
-LumiVM* lumiCreateVM(void) {
-    LumiVM* vm = nullptr;
-    LumiVMCFrame* cframes = nullptr;
+PrismVM* prismCreateVM(void) {
+    PrismVM* vm = nullptr;
+    PrismCFrame* cframes = nullptr;
     uint8_t* data = nullptr;
 
-    vm = calloc(1, sizeof(LumiVM));
+    vm = calloc(1, sizeof(PrismVM));
     if (vm == nullptr) {
         goto cleanup;
     }
 
-    cframes = calloc(CFRAME_COUNT, sizeof(LumiVMCFrame));
+    cframes = calloc(CFRAME_COUNT, sizeof(PrismCFrame));
     if (cframes == nullptr) {
         goto cleanup;
     }
-
 
     data = calloc(DSTACK_BYTE_COUNT, sizeof(uint8_t));
     if (data == nullptr) {
@@ -174,18 +173,19 @@ LumiVM* lumiCreateVM(void) {
 
     return vm;
 
-    cleanup:
-    if (data != nullptr) free(data);
-    if (cframes != nullptr) free(cframes);
-    if (vm != nullptr) free(vm);
-    return nullptr;
+    cleanup: {
+        if (data != nullptr) free(data);
+        if (cframes != nullptr) free(cframes);
+        if (vm != nullptr) free(vm);
+        return nullptr;
+    }
 }
 
 /*
  -- DESTROY VM --
 */
 
-void lumiDestroyVM(LumiVM* vm) {
+void prismDestroyVM(PrismVM* vm) {
     if (vm == nullptr) {
         return;
     }
@@ -200,66 +200,66 @@ void lumiDestroyVM(LumiVM* vm) {
 */
 
 __attribute__((noinline))
-uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
+uint8_t prismRunVM(PrismVM* vm, const uint8_t* program, uint64_t program_size) {
     if (vm == nullptr) {
-        return EX_SIG_ERR + SIG_VM_ERR;
+        return PRISM_EX_SIG_ERR + PRISM_SIG_VM_ERR;
     }
 
     if (program == nullptr) {
-        return EX_SIG_ERR + SIG_PROG_ERR;
+        return PRISM_EX_SIG_ERR + PRISM_SIG_PROG_ERR;
     }
 
     static const void* dispatch_table[256] = {
         [0 ... 255] = &&do_invalid,
 
-        [OP_NOP] = &&do_nop,
-        [OP_HALT] = &&do_halt,
+        [PRISM_OP_NOP] = &&do_nop,
+        [PRISM_OP_HALT] = &&do_halt,
 
-        [OP_CALL] = &&do_call,
-        [OP_CALLR] = &&do_callr,
-        [OP_RET] = &&do_ret,
+        [PRISM_OP_CALL] = &&do_call,
+        [PRISM_OP_CALLR] = &&do_callr,
+        [PRISM_OP_RET] = &&do_ret,
 
-        [OP_MOV] = &&do_mov,
-        [OP_LOAD] = &&do_load,
+        [PRISM_OP_MOV] = &&do_mov,
+        [PRISM_OP_LOAD] = &&do_load,
 
-        [OP_ADD] = &&do_add,
-        [OP_ADDI] = &&do_addi,
+        [PRISM_OP_ADD] = &&do_add,
+        [PRISM_OP_ADDI] = &&do_addi,
 
-        [OP_SUB] = &&do_sub,
-        [OP_SUBI] = &&do_subi,
+        [PRISM_OP_SUB] = &&do_sub,
+        [PRISM_OP_SUBI] = &&do_subi,
 
-        [OP_MUL] = &&do_mul,
-        [OP_MULI] = &&do_muli,
+        [PRISM_OP_MUL] = &&do_mul,
+        [PRISM_OP_MULI] = &&do_muli,
 
-        [OP_JMP] = &&do_jmp,
+        [PRISM_OP_JMP] = &&do_jmp,
 
-        [OP_BEQ] = &&do_beq,
-        [OP_BEQI] = &&do_beqi,
+        [PRISM_OP_BEQ] = &&do_beq,
+        [PRISM_OP_BEQI] = &&do_beqi,
 
-        [OP_BNE] = &&do_bne,
-        [OP_BNEI] = &&do_bnei,
+        [PRISM_OP_BNE] = &&do_bne,
+        [PRISM_OP_BNEI] = &&do_bnei,
 
-        [OP_BGT] = &&do_bgt,
-        [OP_BGTI] = &&do_bgti,
+        [PRISM_OP_BGT] = &&do_bgt,
+        [PRISM_OP_BGTI] = &&do_bgti,
 
-        [OP_BLT] = &&do_blt,
-        [OP_BLTI] = &&do_blti,
+        [PRISM_OP_BLT] = &&do_blt,
+        [PRISM_OP_BLTI] = &&do_blti,
 
-        [OP_BGE] = &&do_bge,
-        [OP_BGEI] = &&do_bgei,
+        [PRISM_OP_BGE] = &&do_bge,
+        [PRISM_OP_BGEI] = &&do_bgei,
 
-        [OP_BLE] = &&do_ble,
-        [OP_BLEI] = &&do_blei,
+        [PRISM_OP_BLE] = &&do_ble,
+        [PRISM_OP_BLEI] = &&do_blei,
     };
 
     #define CHECK_PROGRAM(name) \
         if (!hasNext(vm->pc, program_size, INS_##name##_WIDTH)) { \
-            return EX_SIG_ERR + SIG_SEGV_PC; \
+            return PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_PC; \
         }
 
     dispatch: {
         if (vm->pc >= program_size) {
-            return EX_SIG_ERR + SIG_SEGV_PC;
+            return PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_PC;
         }
 
          goto *dispatch_table[program[vm->pc]];
@@ -270,7 +270,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
     */
 
     do_invalid: {
-        return EX_SIG_ERR + SIG_ILL;
+        return PRISM_EX_SIG_ERR + PRISM_SIG_ILL;
     }
 
     do_nop: {
@@ -287,21 +287,21 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         CHECK_PROGRAM(CALL);
 
         if (vm->cstack.fp + 1 >= CFRAME_COUNT) {
-            return EX_SIG_ERR + SIG_SEGV_SOF;
+            return PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF;
         }
 
         uint8_t start_reg = getNext(vm->pc + INS_CALL_SREG_OFFSET, program);
         uint8_t end_reg = getNext(vm->pc + INS_CALL_EREG_OFFSET, program);
 
         if (start_reg > end_reg) {
-            return EX_SIG_ERR + SIG_ILL;
+            return PRISM_EX_SIG_ERR + PRISM_SIG_ILL;
         }
 
         uint64_t jmp_pc = getNext8(vm->pc + INS_CALL_PC_OFFSET, program);
         uint64_t ret_pc = vm->pc + INS_CALL_WIDTH;
 
-        LumiVMCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
-        LumiVMCFrame* callee_cf = getCurrentCFrame(vm);
+        PrismCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
+        PrismCFrame* callee_cf = getCurrentCFrame(vm);
 
         callee_cf->pc = ret_pc;
 
@@ -321,22 +321,22 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         CHECK_PROGRAM(CALLR);
 
         if (vm->cstack.fp + 1 >= CFRAME_COUNT) {
-            return EX_SIG_ERR + SIG_SEGV_SOF;
+            return PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF;
         }
 
         uint8_t start_reg = getNext(vm->pc + INS_CALLR_SREG_OFFSET, program);
         uint8_t end_reg = getNext(vm->pc + INS_CALLR_EREG_OFFSET, program);
 
         if (start_reg > end_reg) {
-            return EX_SIG_ERR + SIG_ILL;
+            return PRISM_EX_SIG_ERR + PRISM_SIG_ILL;
         }
 
         uint8_t reg = getNext(vm->pc + INS_CALLR_REG_OFFSET, program);
         uint64_t jmp_pc = getCurrentCFrame(vm)->registers[reg];
         uint64_t ret_pc = vm->pc + INS_CALLR_WIDTH;
 
-        LumiVMCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
-        LumiVMCFrame* callee_cf = getCurrentCFrame(vm);
+        PrismCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
+        PrismCFrame* callee_cf = getCurrentCFrame(vm);
 
         callee_cf->pc = ret_pc;
 
@@ -354,7 +354,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
     do_ret: {
         if (vm->cstack.fp == 0) {
-            return EX_SIG_ERR + SIG_ILL;
+            return PRISM_EX_SIG_ERR + PRISM_SIG_ILL;
         }
 
         CHECK_PROGRAM(RET);
@@ -374,7 +374,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
         uint8_t dst = getNext(vm->pc + INS_MOV_DST_OFFSET, program);
         uint8_t src = getNext(vm->pc + INS_MOV_SRC_OFFSET, program);
-        LumiVMCFrame* cf = getCurrentCFrame(vm);
+        PrismCFrame* cf = getCurrentCFrame(vm);
 
         cf->registers[dst] = cf->registers[src];
 
@@ -387,7 +387,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
 
         uint8_t dst = getNext(vm->pc + INS_LOAD_DST_OFFSET, program);
         uint64_t imm = getNext8(vm->pc + INS_LOAD_IMM_OFFSET, program);
-        LumiVMCFrame* cf = getCurrentCFrame(vm);
+        PrismCFrame* cf = getCurrentCFrame(vm);
 
         cf->registers[dst] = imm;
 
@@ -399,7 +399,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
         uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, program); \
-        LumiVMCFrame* cf = getCurrentCFrame(vm); \
+        PrismCFrame* cf = getCurrentCFrame(vm); \
         cf->registers[dst] = cf->registers[src1] op cf->registers[src2]; \
         vm->pc += INS_##name##_WIDTH; \
 
@@ -407,7 +407,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         uint8_t dst = getNext(vm->pc + INS_##name##_DST_OFFSET, program); \
         uint8_t src = getNext(vm->pc + INS_##name##_SRC_OFFSET, program); \
         uint64_t imm = getNext8(vm->pc + INS_##name##_IMM_OFFSET, program); \
-        LumiVMCFrame* cf = getCurrentCFrame(vm); \
+        PrismCFrame* cf = getCurrentCFrame(vm); \
         cf->registers[dst] = cf->registers[src] op imm; \
         vm->pc += INS_##name##_WIDTH;
 
@@ -460,7 +460,7 @@ uint8_t lumiRunVM(LumiVM* vm, const uint8_t* program, uint64_t program_size) {
         uint8_t src1 = getNext(vm->pc + INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(vm->pc + INS_##name##_SRC2_OFFSET, program); \
         int64_t offset = getNext8(vm->pc + INS_##name##_OFFSET_OFFSET, program); \
-        LumiVMCFrame* cf = getCurrentCFrame(vm); \
+        PrismCFrame* cf = getCurrentCFrame(vm); \
         vm->pc += INS_##name##_WIDTH; \
         if (cf->registers[src1] comparitor cf->registers[src2]) { vm->pc += offset; }
 
