@@ -136,14 +136,6 @@ static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
     return val;
 }
 
-static inline PrismCFrame* getCFrame(PrismVM* vm, uint64_t fp) {
-    return vm->cstack.cframes + fp;
-}
-
-static inline PrismCFrame* getCurrentCFrame(PrismVM* vm) {
-    return vm->cstack.cframes + vm->cstack.fp;
-}
-
 /*
  -- CREATE VM --
 */
@@ -213,6 +205,8 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
     const uint8_t* program = vm->program;
     const uint64_t program_size = vm->program_size;
+    uint64_t fp = vm->cstack.fp;
+    PrismCFrame* current_cf = vm->cstack.cframes + fp;
     uint64_t pc = vm->pc;
 
     static const void* dispatch_table[256] = {
@@ -265,7 +259,9 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
     #define EXIT_PROGRAM(exit_code) \
         vm->pc = pc; \
+        vm->cstack.fp = fp; \
         return exit_code;
+
 
     dispatch: {
         if (pc >= program_size) {
@@ -273,7 +269,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         }
 
         if (step-- == 0) {
-            EXIT_PROGRAM(getCurrentCFrame(vm)->registers[0]);
+            EXIT_PROGRAM(current_cf->registers[0]);
         }
 
          goto *dispatch_table[program[pc]];
@@ -284,7 +280,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     */
 
     do_invalid: {
-        return PRISM_EX_SIG_ERR + PRISM_SIG_ILL;
+        EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_ILL);
     }
 
     do_nop: {
@@ -295,13 +291,13 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
     do_halt: {
         pc += INS_HALT_WIDTH;
-        EXIT_PROGRAM(getCurrentCFrame(vm)->registers[0]);
+        EXIT_PROGRAM(current_cf->registers[0]);
     }
 
     do_call: {
         CHECK_PROGRAM(CALL);
 
-        if (vm->cstack.fp + 1 >= CFRAME_COUNT) {
+        if (fp + 1 >= CFRAME_COUNT) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
         }
 
@@ -315,8 +311,10 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         uint64_t jmp_pc = getNext8(pc + INS_CALL_PC_OFFSET, program);
         uint64_t ret_pc = pc + INS_CALL_WIDTH;
 
-        PrismCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
-        PrismCFrame* callee_cf = getCurrentCFrame(vm);
+        PrismCFrame* caller_cf = current_cf;
+        fp++;
+        current_cf++;
+        PrismCFrame* callee_cf = current_cf;
 
         callee_cf->pc = ret_pc;
 
@@ -335,7 +333,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     do_callr: {
         CHECK_PROGRAM(CALLR);
 
-        if (vm->cstack.fp + 1 >= CFRAME_COUNT) {
+        if (fp + 1 >= CFRAME_COUNT) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
         }
 
@@ -347,11 +345,13 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         }
 
         uint8_t reg = getNext(pc + INS_CALLR_REG_OFFSET, vm->program);
-        uint64_t jmp_pc = getCurrentCFrame(vm)->registers[reg];
+        uint64_t jmp_pc = current_cf->registers[reg];
         uint64_t ret_pc = pc + INS_CALLR_WIDTH;
 
-        PrismCFrame* caller_cf = getCFrame(vm, vm->cstack.fp++);
-        PrismCFrame* callee_cf = getCurrentCFrame(vm);
+        PrismCFrame* caller_cf = current_cf;
+        fp++;
+        current_cf++;
+        PrismCFrame* callee_cf = current_cf;
 
         callee_cf->pc = ret_pc;
 
@@ -368,18 +368,19 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     }
 
     do_ret: {
-        if (vm->cstack.fp == 0) {
+        if (fp == 0) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_ILL);
         }
 
         CHECK_PROGRAM(RET);
 
-        uint64_t* ret_reg = getCurrentCFrame(vm)->registers + getNext(pc + INS_RET_REG_OFFSET, program);
+        uint64_t* ret_reg = current_cf->registers + getNext(pc + INS_RET_REG_OFFSET, program);
 
-        pc = getCurrentCFrame(vm)->pc;
-        vm->cstack.fp--;
+        pc = current_cf->pc;
+        fp--;
+        current_cf--;
 
-        memcpy(getCurrentCFrame(vm)->registers, ret_reg, sizeof(uint64_t));
+        memcpy(current_cf->registers, ret_reg, sizeof(uint64_t));
 
         goto dispatch;
     }
@@ -389,7 +390,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
         uint8_t dst = getNext(pc + INS_MOV_DST_OFFSET, program);
         uint8_t src = getNext(pc + INS_MOV_SRC_OFFSET, program);
-        PrismCFrame* cf = getCurrentCFrame(vm);
+        PrismCFrame* cf = current_cf;
 
         cf->registers[dst] = cf->registers[src];
 
@@ -402,7 +403,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
         uint8_t dst = getNext(pc + INS_LOAD_DST_OFFSET, program);
         uint64_t imm = getNext8(pc + INS_LOAD_IMM_OFFSET, program);
-        PrismCFrame* cf = getCurrentCFrame(vm);
+        PrismCFrame* cf = current_cf;
 
         cf->registers[dst] = imm;
 
@@ -414,16 +415,14 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         uint8_t dst = getNext(pc + INS_##name##_DST_OFFSET, program); \
         uint8_t src1 = getNext(pc + INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(pc + INS_##name##_SRC2_OFFSET, program); \
-        PrismCFrame* cf = getCurrentCFrame(vm); \
-        cf->registers[dst] = cf->registers[src1] op cf->registers[src2]; \
+        current_cf->registers[dst] = current_cf->registers[src1] op current_cf->registers[src2]; \
         pc += INS_##name##_WIDTH; \
 
     #define INS_ARITH_IMM_DO(name, op) \
         uint8_t dst = getNext(pc + INS_##name##_DST_OFFSET, program); \
         uint8_t src = getNext(pc + INS_##name##_SRC_OFFSET, program); \
         uint64_t imm = getNext8(pc + INS_##name##_IMM_OFFSET, program); \
-        PrismCFrame* cf = getCurrentCFrame(vm); \
-        cf->registers[dst] = cf->registers[src] op imm; \
+        current_cf->registers[dst] = current_cf->registers[src] op imm; \
         pc += INS_##name##_WIDTH;
 
     do_add: {
@@ -475,16 +474,15 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         uint8_t src1 = getNext(pc + INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(pc + INS_##name##_SRC2_OFFSET, program); \
         int64_t offset = getNext8(pc + INS_##name##_OFFSET_OFFSET, program); \
-        PrismCFrame* cf = getCurrentCFrame(vm); \
         pc += INS_##name##_WIDTH; \
-        if (cf->registers[src1] comparitor cf->registers[src2]) { pc += offset; }
+        if (current_cf->registers[src1] comparitor current_cf->registers[src2]) { pc += offset; }
 
     #define INS_BRANCH_IMM_DO(name, comparitor) \
         uint8_t src1 = getNext(pc + INS_##name##_SRC_OFFSET, program); \
         uint64_t imm = getNext8(pc + INS_##name##_IMM_OFFSET, program); \
         int64_t offset = getNext8(pc + INS_##name##_OFFSET_OFFSET, program); \
         pc += INS_##name##_WIDTH; \
-        if (getCurrentCFrame(vm)->registers[src1] comparitor imm) { pc += offset; }
+        if (current_cf->registers[src1] comparitor imm) { pc += offset; }
 
     do_beq: {
         CHECK_PROGRAM(BEQ);

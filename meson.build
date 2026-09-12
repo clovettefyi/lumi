@@ -23,7 +23,10 @@ args = [
     '-Wno-gnu-designator',
     '-Wno-gnu-label-as-value',
     '-Wno-override-init',
-    '-Wno-extra-semi'
+    '-Wno-extra-semi',
+    '-falign-functions=32',
+    '-falign-jumps=32',
+    '-falign-loops=32'
 ]
 
 executable(
