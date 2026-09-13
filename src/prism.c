@@ -15,12 +15,9 @@
 
 #define CTC constexpr static
 
-/*
- -- VM CONSTANTS --
-*/
-
-CTC size_t CFRAME_COUNT = 128;
-CTC size_t DSTACK_BYTE_COUNT = 1024 * 1024;
+CTC size_t GSTACK_SIZE = 1024 * 1024;
+CTC uint64_t DATA_SLOTS = GSTACK_SIZE / sizeof(uint64_t);
+CTC uint64_t CFRAME_WIDTH = sizeof(PrismCFrame) / sizeof(uint64_t);
 
 /*
  -- INSTRUCTION LAYOUT --
@@ -142,34 +139,35 @@ static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
 
 PrismVM* prismCreate(uint8_t* program, uint64_t program_size) {
     PrismVM* vm = nullptr;
-    PrismCFrame* cframes = nullptr;
-    uint8_t* data = nullptr;
+    uint64_t* gstack = nullptr;
 
-    vm = calloc(1, sizeof(PrismVM));
+    vm = malloc(sizeof(PrismVM));
     if (vm == nullptr) {
         goto cleanup;
     }
 
-    cframes = calloc(CFRAME_COUNT, sizeof(PrismCFrame));
-    if (cframes == nullptr) {
+    gstack = malloc(GSTACK_SIZE);
+    if (gstack == nullptr) {
         goto cleanup;
     }
 
-    data = calloc(DSTACK_BYTE_COUNT, sizeof(uint8_t));
-    if (data == nullptr) {
-        goto cleanup;
-    }
+    vm->gstack = gstack;
 
-    vm->cstack.cframes = cframes;
-    vm->dstack.data = data;
+    vm->cstack.cframes = (PrismCFrame*)gstack;
+    vm->cstack.fp = 0;
+
+    vm->dstack.data = gstack + DATA_SLOTS - 1;
+    vm->dstack.sp = 0;
+    vm->dstack.bp = 0;
+
     vm->program = program;
     vm->program_size = program_size;
+    vm->pc = 0;
 
     return vm;
 
     cleanup: {
-        if (data != nullptr) free(data);
-        if (cframes != nullptr) free(cframes);
+        if (gstack != nullptr) free(gstack);
         if (vm != nullptr) free(vm);
         return nullptr;
     }
@@ -184,8 +182,7 @@ void prismDestroy(PrismVM* vm) {
         return;
     }
 
-    free(vm->dstack.data);
-    free(vm->cstack.cframes);
+    free(vm->gstack);
     free(vm);
 }
 
@@ -203,11 +200,18 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         return PRISM_EX_SIG_ERR + PRISM_SIG_PROG_ERR;
     }
 
+    // issue: some hoisted variables may cause performance issue
+    // worth a review at a later date
     const uint8_t* program = vm->program;
     const uint64_t program_size = vm->program_size;
+    uint64_t pc = vm->pc;
+
     uint64_t fp = vm->cstack.fp;
     PrismCFrame* current_cf = vm->cstack.cframes + fp;
-    uint64_t pc = vm->pc;
+
+    uint64_t* data = vm->dstack.data;
+    uint64_t sp = vm->dstack.sp;
+    uint64_t bp = vm->dstack.bp;
 
     static const void* dispatch_table[256] = {
         [0 ... 255] = &&do_invalid,
@@ -258,8 +262,10 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         }
 
     #define EXIT_PROGRAM(exit_code) \
-        vm->pc = pc; \
         vm->cstack.fp = fp; \
+        vm->dstack.sp = sp; \
+        vm->dstack.bp = bp; \
+        vm->pc = pc; \
         return exit_code;
 
 
@@ -297,7 +303,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     do_call: {
         CHECK_PROGRAM(CALL);
 
-        if (fp + 1 >= CFRAME_COUNT) {
+        if ((fp + 2) * CFRAME_WIDTH + sp > DATA_SLOTS) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
         }
 
@@ -333,7 +339,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     do_callr: {
         CHECK_PROGRAM(CALLR);
 
-        if (fp + 1 >= CFRAME_COUNT) {
+        if ((fp + 2) * CFRAME_WIDTH + sp > DATA_SLOTS) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
         }
 

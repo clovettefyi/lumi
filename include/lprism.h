@@ -18,13 +18,15 @@ typedef struct {
 } PrismCFrame;
 
 typedef struct {
+    uint64_t* gstack;
+
     struct {
         PrismCFrame* cframes;
         uint64_t fp;
     } cstack;
 
     struct {
-        uint8_t* data;
+        uint64_t* data;
         uint64_t sp;
         uint64_t bp;
     } dstack;
