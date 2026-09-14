@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define CTC constexpr static
+
 typedef struct {
     uint64_t registers[256];
     uint64_t pc;
@@ -37,12 +39,15 @@ typedef struct {
 } PrismVM;
 
 typedef enum : uint8_t {
-    PRISM_OP_NOP  = 0x00,
-    PRISM_OP_HALT = 0X01,
+    PRISM_OP_NOP = 0x00,
+
+    PRISM_OP_HALT  = 0x01,
+    PRISM_OP_HALTR = 0x02,
+    PRISM_OP_HALTI = 0x03,
 
     PRISM_OP_CALL  = 0x08,
     PRISM_OP_CALLR = 0x09,
-    PRISM_OP_RET   = 0x0A,
+    PRISM_OP_RET  = 0x0A,
 
     PRISM_OP_MOV  = 0x10,
     PRISM_OP_LOAD = 0x11,
@@ -89,6 +94,95 @@ typedef enum : uint8_t {
     PRISM_SIG_SEGV_PC,
     PRISM_SIG_SEGV_SOF,
 } PrismSignals;
+
+/*
+ -- INSTRUCTION LAYOUT --
+*/
+
+CTC uint64_t PRISM_INS_NOP_WIDTH = 1;
+
+CTC uint64_t PRISM_INS_HALT_WIDTH = 1;
+
+CTC uint64_t PRISM_INS_HALTR_WIDTH = 1 + 1;
+CTC uint64_t PRISM_INS_HALTR_REG_OFFSET = 1;
+
+CTC uint64_t PRISM_INS_HALTI_WIDTH = 1 + 8;
+CTC uint64_t PRISM_INS_HALTI_IMM_OFFSET = 1;
+
+CTC uint64_t PRISM_INS_CALL_WIDTH = 1 + 1 + 1 + 8;
+CTC uint64_t PRISM_INS_CALL_SREG_OFFSET = 1;
+CTC uint64_t PRISM_INS_CALL_EREG_OFFSET = 2;
+CTC uint64_t PRISM_INS_CALL_PC_OFFSET = 3;
+
+CTC uint64_t PRISM_INS_CALLR_WIDTH = 1 + 1 + 1 + 1;
+CTC uint64_t PRISM_INS_CALLR_SREG_OFFSET = 1;
+CTC uint64_t PRISM_INS_CALLR_EREG_OFFSET = 2;
+CTC uint64_t PRISM_INS_CALLR_REG_OFFSET = 3;
+
+CTC uint64_t PRISM_INS_RET_WIDTH = 1 + 1;
+CTC uint64_t PRISM_INS_RET_REG_OFFSET = 1;
+
+CTC uint64_t PRISM_INS_MOV_WIDTH = 1 + 1 + 1;
+CTC uint64_t PRISM_INS_MOV_DST_OFFSET = 1;
+CTC uint64_t PRISM_INS_MOV_SRC_OFFSET = 2;
+
+CTC uint64_t PRISM_INS_LOAD_WIDTH = 1 + 1 + 8;
+CTC uint64_t PRISM_INS_LOAD_DST_OFFSET = 1;
+CTC uint64_t PRISM_INS_LOAD_IMM_OFFSET = 2;
+
+#define PRISM_INS_ARITH_REG_LAYOUT(name) \
+    CTC uint64_t PRISM_INS_##name##_WIDTH = 1 + 1 + 1 +1; \
+    CTC uint64_t PRISM_INS_##name##_DST_OFFSET = 1; \
+    CTC uint64_t PRISM_INS_##name##_SRC1_OFFSET = 2; \
+    CTC uint64_t PRISM_INS_##name##_SRC2_OFFSET = 3;
+
+#define PRISM_INS_ARITH_IMM_LAYOUT(name) \
+    CTC uint64_t PRISM_INS_##name##_WIDTH = 1 + 1 + 1 + 8; \
+    CTC uint64_t PRISM_INS_##name##_DST_OFFSET = 1; \
+    CTC uint64_t PRISM_INS_##name##_SRC_OFFSET = 2; \
+    CTC uint64_t PRISM_INS_##name##_IMM_OFFSET = 3;
+
+PRISM_INS_ARITH_REG_LAYOUT(ADD);
+PRISM_INS_ARITH_IMM_LAYOUT(ADDI);
+
+PRISM_INS_ARITH_REG_LAYOUT(SUB);
+PRISM_INS_ARITH_IMM_LAYOUT(SUBI);
+
+PRISM_INS_ARITH_REG_LAYOUT(MUL);
+PRISM_INS_ARITH_IMM_LAYOUT(MULI);
+
+CTC uint64_t PRISM_INS_JMP_WIDTH = 1 + 8;
+CTC uint64_t PRISM_INS_JMP_PC_OFFSET = 1;
+
+#define PRISM_INS_BRANCH_REG_LAYOUT(name) \
+    CTC uint64_t PRISM_INS_##name##_WIDTH = 1 + 1 + 1 + 8; \
+    CTC uint64_t PRISM_INS_##name##_SRC1_OFFSET = 1; \
+    CTC uint64_t PRISM_INS_##name##_SRC2_OFFSET = 2; \
+    CTC uint64_t PRISM_INS_##name##_OFFSET_OFFSET = 3;
+
+#define PRISM_INS_BRANCH_IMM_LAYOUT(name) \
+    CTC uint64_t PRISM_INS_##name##_WIDTH = 1 + 1 + 8 + 8; \
+    CTC uint64_t PRISM_INS_##name##_SRC_OFFSET = 1; \
+    CTC uint64_t PRISM_INS_##name##_IMM_OFFSET = 2; \
+    CTC uint64_t PRISM_INS_##name##_OFFSET_OFFSET = 10;
+
+PRISM_INS_BRANCH_REG_LAYOUT(BEQ);
+PRISM_INS_BRANCH_IMM_LAYOUT(BEQI);
+
+PRISM_INS_BRANCH_REG_LAYOUT(BNE);
+PRISM_INS_BRANCH_IMM_LAYOUT(BNEI);
+
+PRISM_INS_BRANCH_REG_LAYOUT(BGT);
+PRISM_INS_BRANCH_IMM_LAYOUT(BGTI);
+
+PRISM_INS_BRANCH_REG_LAYOUT(BLT);
+PRISM_INS_BRANCH_IMM_LAYOUT(BLTI);
+
+PRISM_INS_BRANCH_REG_LAYOUT(BGE);
+PRISM_INS_BRANCH_IMM_LAYOUT(BGEI);
+
+PRISM_INS_BRANCH_REG_LAYOUT(BLE);
+PRISM_INS_BRANCH_IMM_LAYOUT(BLEI);
 
 PrismVM* prismCreate(uint8_t* program, uint64_t program_size);
 void prismDestroy(PrismVM* vm);
