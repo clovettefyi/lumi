@@ -126,7 +126,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     uint64_t fp = vm->cstack.fp;
     PrismCFrame* current_cf = vm->cstack.cframes + fp;
 
-    uint64_t* data = vm->dstack.data;
+    uint64_t* dstack = vm->dstack.data;
     uint64_t sp = vm->dstack.sp;
     uint64_t bp = vm->dstack.bp;
 
@@ -174,6 +174,8 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
         [PRISM_OP_BLE] = &&do_ble,
         [PRISM_OP_BLEI] = &&do_blei,
+
+        [PRISM_OP_ASP] = &&do_asp,
     };
 
     #define CHECK_PROGRAM(name) \
@@ -241,7 +243,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     do_call: {
         CHECK_PROGRAM(CALL);
 
-        if ((fp + 2) * CFRAME_WIDTH + sp > DATA_SLOTS) {
+        if ((fp + 2) * CFRAME_WIDTH + (sp + 1) > DATA_SLOTS) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
         }
 
@@ -271,13 +273,16 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
         pc = jmp_pc;
 
+        *(dstack - sp++) = bp;
+        bp = sp;
+
         goto dispatch;
     }
 
     do_callr: {
         CHECK_PROGRAM(CALLR);
 
-        if ((fp + 2) * CFRAME_WIDTH + sp > DATA_SLOTS) {
+        if ((fp + 2) * CFRAME_WIDTH + (sp + 1) > DATA_SLOTS) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
         }
 
@@ -308,6 +313,9 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
         pc = jmp_pc;
 
+        *(dstack - sp++) = bp;
+        bp = sp;
+
         goto dispatch;
     }
 
@@ -325,6 +333,9 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         current_cf--;
 
         memcpy(current_cf->registers, ret_reg, sizeof(uint64_t));
+
+        sp = bp - 1;
+        bp = *(dstack - sp);
 
         goto dispatch;
     }
@@ -497,6 +508,22 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     do_blei: {
         CHECK_PROGRAM(BLEI);
         INS_BRANCH_IMM_DO(BLEI, <=);
+        goto dispatch;
+    }
+
+    do_asp: {
+        CHECK_PROGRAM(ASP);
+
+
+        uint64_t imm = (getNext8(pc + PRISM_INS_ASP_IMM_OFFSET, program) + 7) >> 3;
+
+        if ((fp + 1) * CFRAME_WIDTH + (sp + imm) > DATA_SLOTS) {
+            EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
+        }
+
+        sp += imm;
+
+        pc += PRISM_INS_ASP_WIDTH;
         goto dispatch;
     }
  }
