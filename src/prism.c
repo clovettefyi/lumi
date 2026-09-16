@@ -8,6 +8,7 @@
 
 #include "lprism.h"
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -175,7 +176,8 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         [PRISM_OP_BLE] = &&do_ble,
         [PRISM_OP_BLEI] = &&do_blei,
 
-        [PRISM_OP_ASP] = &&do_asp,
+        [PRISM_OP_ALLOC] = &&do_alloc,
+        [PRISM_OP_ALLOCR] = &&do_allocr,
     };
 
     #define CHECK_PROGRAM(name) \
@@ -183,13 +185,14 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_PC); \
         }
 
+    #define NEXT_INSTRUCTION(name) pc += PRISM_INS_##name##_WIDTH; goto dispatch;
+
     #define EXIT_PROGRAM(exit_code) \
         vm->cstack.fp = fp; \
         vm->dstack.sp = sp; \
         vm->dstack.bp = bp; \
         vm->pc = pc; \
         return exit_code;
-
 
     dispatch: {
         if (pc >= program_size) {
@@ -212,9 +215,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     }
 
     do_nop: {
-        pc += PRISM_INS_NOP_WIDTH;
-
-        goto dispatch;
+        NEXT_INSTRUCTION(NOP);
     }
 
     do_halt: {
@@ -349,8 +350,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
         cf->registers[dst] = cf->registers[src];
 
-        pc += PRISM_INS_MOV_WIDTH;
-        goto dispatch;
+        NEXT_INSTRUCTION(MOV);
     }
 
     do_load: {
@@ -362,8 +362,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
         cf->registers[dst] = imm;
 
-        pc += PRISM_INS_LOAD_WIDTH;
-        goto dispatch;
+        NEXT_INSTRUCTION(LOAD);
     }
 
     #define INS_ARITH_REG_DO(name, op) \
@@ -371,49 +370,47 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         uint8_t src1 = getNext(pc + PRISM_INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(pc + PRISM_INS_##name##_SRC2_OFFSET, program); \
         current_cf->registers[dst] = current_cf->registers[src1] op current_cf->registers[src2]; \
-        pc += PRISM_INS_##name##_WIDTH; \
 
     #define INS_ARITH_IMM_DO(name, op) \
         uint8_t dst = getNext(pc + PRISM_INS_##name##_DST_OFFSET, program); \
         uint8_t src = getNext(pc + PRISM_INS_##name##_SRC_OFFSET, program); \
         uint64_t imm = getNext8(pc + PRISM_INS_##name##_IMM_OFFSET, program); \
         current_cf->registers[dst] = current_cf->registers[src] op imm; \
-        pc += PRISM_INS_##name##_WIDTH;
 
     do_add: {
         CHECK_PROGRAM(ADD);
         INS_ARITH_REG_DO(ADD, +);
-        goto dispatch;
+        NEXT_INSTRUCTION(ADD);
     }
 
     do_addi: {
         CHECK_PROGRAM(ADDI);
         INS_ARITH_IMM_DO(ADDI, +);
-        goto dispatch;
+        NEXT_INSTRUCTION(ADDI);
     }
 
     do_sub: {
         CHECK_PROGRAM(SUB);
         INS_ARITH_REG_DO(SUB, -);
-        goto dispatch;
+        NEXT_INSTRUCTION(SUB);
     }
 
     do_subi: {
         CHECK_PROGRAM(SUBI);
         INS_ARITH_IMM_DO(SUBI, -);
-        goto dispatch;
+        NEXT_INSTRUCTION(SUBI);
     }
 
     do_mul: {
         CHECK_PROGRAM(MUL);
         INS_ARITH_REG_DO(MUL, *);
-        goto dispatch;
+        NEXT_INSTRUCTION(MUL);
     }
 
     do_muli: {
         CHECK_PROGRAM(MULI);
         INS_ARITH_IMM_DO(MULI, *);
-        goto dispatch;
+        NEXT_INSTRUCTION(MULI);
     }
 
     do_jmp: {
@@ -511,19 +508,32 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         goto dispatch;
     }
 
-    do_asp: {
-        CHECK_PROGRAM(ASP);
+    #define NEAREST_8(val) ((val + 7) >> 3)
 
+    do_alloc: {
+        CHECK_PROGRAM(ALLOC);
 
-        uint64_t imm = (getNext8(pc + PRISM_INS_ASP_IMM_OFFSET, program) + 7) >> 3;
+        uint64_t imm = NEAREST_8(getNext8(pc + PRISM_INS_ALLOC_IMM_OFFSET, program));
 
         if ((fp + 1) * CFRAME_WIDTH + (sp + imm) > DATA_SLOTS) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
         }
 
         sp += imm;
+        NEXT_INSTRUCTION(ALLOC);
+    }
 
-        pc += PRISM_INS_ASP_WIDTH;
-        goto dispatch;
+    do_allocr: {
+        CHECK_PROGRAM(ALLOCR);
+
+        uint8_t reg = NEAREST_8(getNext(pc + PRISM_INS_ALLOCR_REG_OFFSET, program));
+        uint64_t alloc = current_cf->registers[reg];
+
+        if ((fp + 1) * CFRAME_WIDTH + (sp + alloc > DATA_SLOTS)) {
+            EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
+        }
+
+        sp += alloc;
+        NEXT_INSTRUCTION(ALLOCR);
     }
  }

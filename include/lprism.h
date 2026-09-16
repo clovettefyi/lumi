@@ -81,7 +81,8 @@ typedef enum : uint8_t {
     PRISM_OP_BLE  = 0x43,
     PRISM_OP_BLEI = 0x44,
 
-    PRISM_OP_ASP = 0x48,
+    PRISM_OP_ALLOC  = 0x48,
+    PRISM_OP_ALLOCR = 0x49,
 } PrismOpCode;
 
 typedef enum : uint8_t {
@@ -186,8 +187,11 @@ PRISM_INS_BRANCH_IMM_LAYOUT(BGEI);
 PRISM_INS_BRANCH_REG_LAYOUT(BLE);
 PRISM_INS_BRANCH_IMM_LAYOUT(BLEI);
 
-CTC uint64_t PRISM_INS_ASP_WIDTH = 1 + 8;
-CTC uint64_t PRISM_INS_ASP_IMM_OFFSET = 1;
+CTC uint64_t PRISM_INS_ALLOC_WIDTH = 1 + 8;
+CTC uint64_t PRISM_INS_ALLOC_IMM_OFFSET = 1;
+
+CTC uint64_t PRISM_INS_ALLOCR_WIDTH = 1 + 1;
+CTC uint64_t PRISM_INS_ALLOCR_REG_OFFSET = 1;
 
 PrismVM* prismCreate(uint8_t* program, uint64_t program_size);
 void prismDestroy(PrismVM* vm);
