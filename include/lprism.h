@@ -39,9 +39,10 @@ typedef struct {
 } PrismVM;
 
 typedef enum : uint8_t {
-    PRISM_OP_NOP = 0x00,
+    PRISM_OP_HALT = 0xFF,
 
-    PRISM_OP_HALT  = 0x01,
+    PRISM_OP_NOP = 0x01,
+
     PRISM_OP_HALTR = 0x02,
     PRISM_OP_HALTI = 0x03,
 
@@ -83,6 +84,8 @@ typedef enum : uint8_t {
 
     PRISM_OP_ALLOC  = 0x48,
     PRISM_OP_ALLOCR = 0x49,
+
+    PRISM_OP_EXT = 0xEE,
 } PrismOpCode;
 
 typedef enum : uint8_t {

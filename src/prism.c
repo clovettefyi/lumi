@@ -58,6 +58,7 @@ static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
 PrismVM* prismCreate(uint8_t* program, uint64_t program_size) {
     PrismVM* vm = nullptr;
     uint64_t* gstack = nullptr;
+    uint8_t* programp = nullptr;
 
     vm = malloc(sizeof(PrismVM));
     if (vm == nullptr) {
@@ -66,6 +67,11 @@ PrismVM* prismCreate(uint8_t* program, uint64_t program_size) {
 
     gstack = malloc(GSTACK_SIZE);
     if (gstack == nullptr) {
+        goto cleanup;
+    }
+
+    programp = malloc(program_size + 1);
+    if (programp == nullptr) {
         goto cleanup;
     }
 
@@ -78,13 +84,17 @@ PrismVM* prismCreate(uint8_t* program, uint64_t program_size) {
     vm->dstack.sp = 0;
     vm->dstack.bp = 0;
 
-    vm->program = program;
+    memcpy(programp, program, program_size * sizeof(uint8_t));
+    programp[program_size] = 0;
+
+    vm->program = programp;
     vm->program_size = program_size;
     vm->pc = 0;
 
     return vm;
 
     cleanup: {
+        if (programp != nullptr) free(programp);
         if (gstack != nullptr) free(gstack);
         if (vm != nullptr) free(vm);
         return nullptr;
@@ -131,8 +141,9 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     uint64_t sp = vm->dstack.sp;
     uint64_t bp = vm->dstack.bp;
 
-    static const void* dispatch_table[256] = {
-        [0 ... 255] = &&do_invalid,
+    static const void* dispatch_table[] = {
+        [1 ... UINT8_MAX] = &&do_invalid,
+        [0] = &&do_segv_pc,
 
         [PRISM_OP_NOP] = &&do_nop,
 
@@ -195,10 +206,6 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         return exit_code;
 
     dispatch: {
-        if (pc >= program_size) {
-            EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_PC);
-        }
-
         if (step-- == 0) {
             EXIT_PROGRAM(current_cf->registers[0]);
         }
@@ -209,6 +216,10 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
     /*
      -- INSTRUCTIONS --
     */
+
+    do_segv_pc: {
+        EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_PC);
+    }
 
     do_invalid: {
         EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_ILL);
@@ -515,7 +526,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
 
         uint64_t imm = NEAREST_8(getNext8(pc + PRISM_INS_ALLOC_IMM_OFFSET, program));
 
-        if ((fp + 1) * CFRAME_WIDTH + (sp + imm) > DATA_SLOTS) {
+        if (((fp + 1) * CFRAME_WIDTH + (sp + imm)) > DATA_SLOTS) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
         }
 
@@ -529,7 +540,7 @@ uint8_t prismStepForward(PrismVM* vm, uint64_t step) {
         uint8_t reg = NEAREST_8(getNext(pc + PRISM_INS_ALLOCR_REG_OFFSET, program));
         uint64_t alloc = current_cf->registers[reg];
 
-        if ((fp + 1) * CFRAME_WIDTH + (sp + alloc > DATA_SLOTS)) {
+        if (((fp + 1) * CFRAME_WIDTH + (sp + alloc)) > DATA_SLOTS) {
             EXIT_PROGRAM(PRISM_EX_SIG_ERR + PRISM_SIG_SEGV_SOF);
         }
 
