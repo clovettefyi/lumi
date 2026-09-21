@@ -105,6 +105,7 @@ typedef enum LP_TYPED_ENUM(uint8_t) {
     LP_SIG_ILL,
     LP_SIG_SEGV_PC,
     LP_SIG_SEGV_SOF,
+    LP_SIG_SEGV_SUF,
 } LpSignal;
 
 /*

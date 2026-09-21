@@ -185,6 +185,9 @@ uint8_t lpRun(LpInstance* vm) {
 
         [LP_INS_AS] = &&do_as,
         [LP_INS_ASR] = &&do_asr,
+
+        [LP_INS_FS] = &&do_fs,
+        [LP_INS_FSR] = &&do_fsr,
     };
 
     goto *dispatch_table[program[pc]];
@@ -495,12 +498,10 @@ uint8_t lpRun(LpInstance* vm) {
         NEXT_INSTRUCTION_DIRECT();
     }
 
-    #define NEAREST_8(val) ((val + 7) >> 3)
-
     do_as: {
         CHECK_PROGRAM(AS);
 
-        uint64_t imm = NEAREST_8(getNext8(pc + LP_INS_AS_IMM_OFFSET, program));
+        uint64_t imm = getNext8(pc + LP_INS_AS_IMM_OFFSET, program);
 
         if (((fp + 1) * CFRAME_WIDTH + (sp + imm)) > DATA_SLOTS) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
@@ -513,7 +514,7 @@ uint8_t lpRun(LpInstance* vm) {
     do_asr: {
         CHECK_PROGRAM(ASR);
 
-        uint8_t reg = NEAREST_8(getNext(pc + LP_INS_ASR_REG_OFFSET, program));
+        uint8_t reg = getNext(pc + LP_INS_ASR_REG_OFFSET, program);
         uint64_t alloc = current_cf->registers[reg];
 
         if (((fp + 1) * CFRAME_WIDTH + (sp + alloc)) > DATA_SLOTS) {
@@ -523,4 +524,32 @@ uint8_t lpRun(LpInstance* vm) {
         sp += alloc;
         NEXT_INSTRUCTION(ASR);
     }
+
+    do_fs: {
+        CHECK_PROGRAM(FS);
+
+        uint64_t free = getNext8(pc + LP_INS_FS_IMM_OFFSET, program);
+
+        if (free > sp) {
+            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
+        }
+
+        sp -= free;
+        NEXT_INSTRUCTION(FS);
+    }
+
+    do_fsr: {
+        CHECK_PROGRAM(FSR);
+
+        uint64_t reg = getNext(pc + LP_INS_FSR_REG_OFFSET, program);
+        uint64_t free = current_cf->registers[reg];
+
+        if (free > sp) {
+            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
+        }
+
+        sp -= free;
+        NEXT_INSTRUCTION(FS);
+    }
+
  }
