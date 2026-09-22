@@ -14,14 +14,6 @@
 #include <string.h>
 #include <stddef.h>
 
-constexpr static size_t GSTACK_SIZE = 1024 * 1024;
-constexpr static uint64_t DATA_SLOTS = GSTACK_SIZE / sizeof(uint64_t);
-constexpr static uint64_t CFRAME_WIDTH = sizeof(LpCFrame) / sizeof(uint64_t);
-
-/*
- -- HELPER FUNCTIONS --
-*/
-
 static inline bool hasNext(uint64_t pc, uint64_t program_size, uint64_t bytes) {
     if (pc + bytes > program_size) return false;
     return true;
@@ -49,13 +41,9 @@ static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
     return val;
 }
 
-/*
- -- CREATE VM --
-*/
-
-LpInstance* lpCreate(uint8_t* program, uint64_t program_size) {
+LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_size) {
     LpInstance* vm = nullptr;
-    uint64_t* gstack = nullptr;
+    uint8_t* stack = nullptr;
     uint8_t* programp = nullptr;
 
     vm = malloc(sizeof(LpInstance));
@@ -63,8 +51,8 @@ LpInstance* lpCreate(uint8_t* program, uint64_t program_size) {
         goto cleanup;
     }
 
-    gstack = malloc(GSTACK_SIZE);
-    if (gstack == nullptr) {
+    stack = malloc(stack_size);
+    if (stack == nullptr) {
         goto cleanup;
     }
 
@@ -73,14 +61,10 @@ LpInstance* lpCreate(uint8_t* program, uint64_t program_size) {
         goto cleanup;
     }
 
-    vm->gstack = gstack;
-
-    vm->cstack.cframes = (LpCFrame*)gstack;
-    vm->cstack.fp = 0;
-
-    vm->dstack.data = gstack + DATA_SLOTS - 1;
-    vm->dstack.sp = 0;
-    vm->dstack.bp = 0;
+    vm->stack = stack;
+    vm->sp = 0;
+    vm->bp = 0;
+    vm->stack_size = stack_size;
 
     memcpy(programp, program, program_size * sizeof(uint8_t));
     programp[program_size] = 0;
@@ -93,28 +77,21 @@ LpInstance* lpCreate(uint8_t* program, uint64_t program_size) {
 
     cleanup: {
         if (programp != nullptr) free(programp);
-        if (gstack != nullptr) free(gstack);
+        if (stack != nullptr) free(stack);
         if (vm != nullptr) free(vm);
         return nullptr;
     }
 }
-
-/*
- -- DESTROY VM --
-*/
 
 void lpDestroy(LpInstance* vm) {
     if (vm == nullptr) {
         return;
     }
 
-    free(vm->gstack);
+    free(vm->stack);
+    free(vm->program);
     free(vm);
 }
-
-/*
- -- RUN VM --
-*/
 
 __attribute__((noinline))
 uint8_t lpRun(LpInstance* vm) {
@@ -126,18 +103,17 @@ uint8_t lpRun(LpInstance* vm) {
         return LP_EX_SIG_ERR + LP_SIG_PROG_ERR;
     }
 
-    // issue: some hoisted variables may cause performance issue
-    // worth a review at a later date
     const uint8_t* program = vm->program;
     const uint64_t program_size = vm->program_size;
     uint64_t pc = vm->pc;
 
-    uint64_t fp = vm->cstack.fp;
-    LpCFrame* current_cf = vm->cstack.cframes + fp;
+    uint64_t* registers = vm->registers;
 
-    uint64_t* dstack = vm->dstack.data;
-    uint64_t sp = vm->dstack.sp;
-    uint64_t bp = vm->dstack.bp;
+    uint8_t* stack = vm->stack;
+    uint64_t sp = vm->sp;
+    uint64_t bp = vm->bp;
+
+    const uint64_t stack_size = vm->stack_size;
 
     static const void* dispatch_table[] = {
         [1 ... UINT8_MAX] = &&do_invalid,
@@ -204,10 +180,9 @@ uint8_t lpRun(LpInstance* vm) {
         goto *dispatch_table[program[pc]];
 
     #define EXIT_PROGRAM(exit_code) \
-        vm->cstack.fp = fp; \
-        vm->dstack.sp = sp; \
-        vm->dstack.bp = bp; \
         vm->pc = pc; \
+        vm->sp = sp; \
+        vm->bp = bp; \
         return exit_code;
 
     /*
@@ -228,43 +203,27 @@ uint8_t lpRun(LpInstance* vm) {
 
     do_ex: {
         pc += LP_INS_EX_WIDTH;
-        EXIT_PROGRAM(current_cf->registers[0]);
+        EXIT_PROGRAM(registers[0]);
     }
 
     do_jal: {
         CHECK_PROGRAM(JAL);
 
-        if ((fp + 2) * CFRAME_WIDTH + (sp + 1) > DATA_SLOTS) {
+        if (sp + 16 > stack_size) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
-        uint8_t start_reg = getNext(pc + LP_INS_JAL_SREG_OFFSET, program);
-        uint8_t end_reg = getNext(pc + LP_INS_JAL_EREG_OFFSET, program);
+        uint64_t new_addr = getNext8(pc + LP_INS_JAL_ADDR_OFFSET, program);
+        uint64_t old_addr = pc + LP_INS_JAL_WIDTH;
 
-        if (start_reg > end_reg) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_ILL);
-        }
+        pc = new_addr;
 
-        uint64_t jmp_pc = getNext8(pc + LP_INS_JAL_PC_OFFSET, program);
-        uint64_t ret_pc = pc + LP_INS_JAL_WIDTH;
+        memcpy(stack + sp, &old_addr, sizeof(old_addr));
+        sp += sizeof(old_addr);
 
-        LpCFrame* caller_cf = current_cf;
-        fp++;
-        current_cf++;
-        LpCFrame* callee_cf = current_cf;
+        memcpy(stack + sp, &bp, sizeof(bp));
+        sp += sizeof(bp);
 
-        callee_cf->pc = ret_pc;
-
-        size_t reg_count = end_reg - start_reg + 1;
-
-        uint64_t* out_regs = caller_cf->registers + start_reg;
-        uint64_t* in_regs = callee_cf->registers;
-
-        memcpy(in_regs, out_regs, reg_count * sizeof(uint64_t));
-
-        pc = jmp_pc;
-
-        *(dstack - sp++) = bp;
         bp = sp;
 
         NEXT_INSTRUCTION_DIRECT();
@@ -273,74 +232,56 @@ uint8_t lpRun(LpInstance* vm) {
     do_jalr: {
         CHECK_PROGRAM(JALR);
 
-        if ((fp + 2) * CFRAME_WIDTH + (sp + 1) > DATA_SLOTS) {
+        if (sp + 16 > stack_size) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
-        uint8_t start_reg = getNext(pc + LP_INS_JALR_SREG_OFFSET, program);
-        uint8_t end_reg = getNext(pc + LP_INS_JALR_EREG_OFFSET, program);
+        uint8_t reg = getNext(pc + LP_INS_JALR_REG_OFFSET, program);
+        uint64_t new_addr = registers[reg];
+        uint64_t old_addr = pc + LP_INS_JALR_WIDTH;
 
-        if (start_reg > end_reg) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_ILL);
-        }
+        pc = new_addr;
 
-        uint8_t reg = getNext(pc + LP_INS_JALR_REG_OFFSET, vm->program);
-        uint64_t jmp_pc = current_cf->registers[reg];
-        uint64_t ret_pc = pc + LP_INS_JALR_WIDTH;
+        memcpy(stack + sp, &old_addr, sizeof(old_addr));
+        sp += sizeof(old_addr);
 
-        LpCFrame* caller_cf = current_cf;
-        fp++;
-        current_cf++;
-        LpCFrame* callee_cf = current_cf;
+        memcpy(stack + sp, &bp, sizeof(bp));
+        sp += sizeof(bp);
 
-        callee_cf->pc = ret_pc;
-
-        size_t reg_count = end_reg - start_reg + 1;
-
-        uint64_t* out_regs = caller_cf->registers + start_reg;
-        uint64_t* in_regs = callee_cf->registers;
-
-        memcpy(in_regs, out_regs, reg_count * sizeof(uint64_t));
-
-        pc = jmp_pc;
-
-        *(dstack - sp++) = bp;
         bp = sp;
 
         NEXT_INSTRUCTION_DIRECT();
     }
 
     do_ret: {
-        if (fp == 0) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_ILL);
+        if (bp == 0) {
+            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
         }
 
         CHECK_PROGRAM(RET);
 
-        uint64_t* ret_reg = current_cf->registers + getNext(pc + LP_INS_RET_REG_OFFSET, program);
+        uint64_t old_bp, old_addr;
+        memcpy(&old_bp, stack + bp - sizeof(old_bp), sizeof(old_bp));
+        bp -= sizeof(old_bp);
+        memcpy(&old_addr, stack + bp - sizeof(old_addr), sizeof(old_addr));
 
-        pc = current_cf->pc;
-        fp--;
-        current_cf--;
+        bp = old_bp;
+        sp = bp;
 
-        memcpy(current_cf->registers, ret_reg, sizeof(uint64_t));
-
-        sp = bp - 1;
-        bp = *(dstack - sp);
+        pc = old_addr;
 
         NEXT_INSTRUCTION_DIRECT();
     }
 
     do_mov: {
-        CHECK_PROGRAM(MOV);
+        CHECK_PROGRAM(MV);
 
-        uint8_t dst = getNext(pc + LP_INS_MOV_DST_OFFSET, program);
-        uint8_t src = getNext(pc + LP_INS_MOV_SRC_OFFSET, program);
-        LpCFrame* cf = current_cf;
+        uint8_t dst = getNext(pc + LP_INS_MV_DST_OFFSET, program);
+        uint8_t src = getNext(pc + LP_INS_MV_SRC_OFFSET, program);
 
-        cf->registers[dst] = cf->registers[src];
+        registers[dst] = registers[src];
 
-        NEXT_INSTRUCTION(MOV);
+        NEXT_INSTRUCTION(MV);
     }
 
     do_ldi: {
@@ -348,9 +289,8 @@ uint8_t lpRun(LpInstance* vm) {
 
         uint8_t dst = getNext(pc + LP_INS_LDI_DST_OFFSET, program);
         uint64_t imm = getNext8(pc + LP_INS_LDI_IMM_OFFSET, program);
-        LpCFrame* cf = current_cf;
 
-        cf->registers[dst] = imm;
+        registers[dst] = imm;
 
         NEXT_INSTRUCTION(LDI);
     }
@@ -359,13 +299,13 @@ uint8_t lpRun(LpInstance* vm) {
         uint8_t dst = getNext(pc + LP_INS_##name##_DST_OFFSET, program); \
         uint8_t src1 = getNext(pc + LP_INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(pc + LP_INS_##name##_SRC2_OFFSET, program); \
-        current_cf->registers[dst] = current_cf->registers[src1] op current_cf->registers[src2]; \
+        registers[dst] = registers[src1] op registers[src2]; \
 
     #define INS_ARITH_IMM_DO(name, op) \
         uint8_t dst = getNext(pc + LP_INS_##name##_DST_OFFSET, program); \
         uint8_t src = getNext(pc + LP_INS_##name##_SRC_OFFSET, program); \
         uint64_t imm = getNext8(pc + LP_INS_##name##_IMM_OFFSET, program); \
-        current_cf->registers[dst] = current_cf->registers[src] op imm; \
+        registers[dst] = registers[src] op imm; \
 
     do_add: {
         CHECK_PROGRAM(ADD);
@@ -416,86 +356,82 @@ uint8_t lpRun(LpInstance* vm) {
         uint8_t src1 = getNext(pc + LP_INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(pc + LP_INS_##name##_SRC2_OFFSET, program); \
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
+        if (registers[src1] comparitor registers[src2]) { \
+            pc += LP_INS_##name##_WIDTH + offset; \
+            NEXT_INSTRUCTION_DIRECT(); \
+        } \
         pc += LP_INS_##name##_WIDTH; \
-        if (current_cf->registers[src1] comparitor current_cf->registers[src2]) { pc += offset; }
+        NEXT_INSTRUCTION_DIRECT();
 
     #define INS_BRANCH_IMM_DO(name, comparitor) \
-        uint8_t src1 = getNext(pc + LP_INS_##name##_SRC_OFFSET, program); \
+        uint8_t src = getNext(pc + LP_INS_##name##_SRC_OFFSET, program); \
         uint64_t imm = getNext8(pc + LP_INS_##name##_IMM_OFFSET, program); \
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
+        if (registers[src] comparitor imm) { \
+            pc += LP_INS_##name##_WIDTH + offset; \
+            NEXT_INSTRUCTION_DIRECT(); \
+        } \
         pc += LP_INS_##name##_WIDTH; \
-        if (current_cf->registers[src1] comparitor imm) { pc += offset; }
+        NEXT_INSTRUCTION_DIRECT();
 
     do_beq: {
         CHECK_PROGRAM(BEQ);
         INS_BRANCH_REG_DO(BEQ, ==);
-        NEXT_INSTRUCTION_DIRECT()
     }
 
     do_beqi: {
         CHECK_PROGRAM(BEQI);
         INS_BRANCH_IMM_DO(BEQI, ==);
-        NEXT_INSTRUCTION_DIRECT()
     }
 
     do_bne: {
         CHECK_PROGRAM(BNE);
         INS_BRANCH_REG_DO(BNE, !=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bnei: {
         CHECK_PROGRAM(BNEI);
         INS_BRANCH_IMM_DO(BNEI, !=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bgt: {
         CHECK_PROGRAM(BGT);
         INS_BRANCH_REG_DO(BGT, >);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bgti: {
         CHECK_PROGRAM(BGTI);
         INS_BRANCH_IMM_DO(BGTI, >);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_blt: {
         CHECK_PROGRAM(BLT);
         INS_BRANCH_REG_DO(BLT, <);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_blti: {
         CHECK_PROGRAM(BLTI);
         INS_BRANCH_IMM_DO(BLTI, <);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bge: {
         CHECK_PROGRAM(BGE);
         INS_BRANCH_REG_DO(BGE, >=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bgei: {
         CHECK_PROGRAM(BGEI);
         INS_BRANCH_IMM_DO(BGEI, >=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_ble: {
         CHECK_PROGRAM(BLE);
         INS_BRANCH_REG_DO(BLE, <=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_blei: {
         CHECK_PROGRAM(BLEI);
         INS_BRANCH_IMM_DO(BLEI, <=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_as: {
@@ -503,7 +439,7 @@ uint8_t lpRun(LpInstance* vm) {
 
         uint64_t imm = getNext8(pc + LP_INS_AS_IMM_OFFSET, program);
 
-        if (((fp + 1) * CFRAME_WIDTH + (sp + imm)) > DATA_SLOTS) {
+        if (sp + imm > stack_size) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
@@ -515,9 +451,9 @@ uint8_t lpRun(LpInstance* vm) {
         CHECK_PROGRAM(ASR);
 
         uint8_t reg = getNext(pc + LP_INS_ASR_REG_OFFSET, program);
-        uint64_t alloc = current_cf->registers[reg];
+        uint64_t alloc = registers[reg];
 
-        if (((fp + 1) * CFRAME_WIDTH + (sp + alloc)) > DATA_SLOTS) {
+        if (sp + alloc > stack_size) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
@@ -542,14 +478,14 @@ uint8_t lpRun(LpInstance* vm) {
         CHECK_PROGRAM(FSR);
 
         uint64_t reg = getNext(pc + LP_INS_FSR_REG_OFFSET, program);
-        uint64_t free = current_cf->registers[reg];
+        uint64_t free = registers[reg];
 
         if (free > sp) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
         }
 
         sp -= free;
-        NEXT_INSTRUCTION(FS);
+        NEXT_INSTRUCTION(FSR);
     }
 
  }

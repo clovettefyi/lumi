@@ -13,31 +13,20 @@
 #include <stdint.h>
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
-    #define LP_CONST(type, name, val) constexpr static type name = val;
     #define LP_TYPED_ENUM(type) : type
 #else
-    #define LP_CONST(type, name, val) enum { name = val };
     #define LP_TYPED_ENUM(type)
 #endif
 
-typedef struct {
-    uint64_t registers[256];
-    uint64_t pc;
-} LpCFrame;
+#define LP_REG_COUNT 256
 
 typedef struct {
-    uint64_t* gstack;
+    uint64_t registers[LP_REG_COUNT];
 
-    struct {
-        LpCFrame* cframes;
-        uint64_t fp;
-    } cstack;
-
-    struct {
-        uint64_t* data;
-        uint64_t sp;
-        uint64_t bp;
-    } dstack;
+    uint8_t* stack;
+    uint64_t stack_size;
+    uint64_t sp;
+    uint64_t bp;
 
     uint8_t* program;
     uint64_t program_size;
@@ -112,98 +101,132 @@ typedef enum LP_TYPED_ENUM(uint8_t) {
  -- INSTRUCTION LAYOUT --
 */
 
-LP_CONST(uint64_t, LP_INS_NOP_WIDTH, 1);
+#define LP_INS_NOP_WIDTH 1
 
-LP_CONST(uint64_t, LP_INS_EX_WIDTH, 1);
+#define LP_INS_EX_WIDTH 1
 
-LP_CONST(uint64_t, LP_INS_JAL_WIDTH, 1 + 1 + 1 + 8);
-LP_CONST(uint64_t, LP_INS_JAL_SREG_OFFSET, 1);
-LP_CONST(uint64_t, LP_INS_JAL_EREG_OFFSET, 2);
-LP_CONST(uint64_t, LP_INS_JAL_PC_OFFSET, 3);
+#define LP_INS_JAL_WIDTH 1 + 8
+#define LP_INS_JAL_ADDR_OFFSET 1
 
-LP_CONST(uint64_t, LP_INS_JALR_WIDTH, 1 + 1 + 1 + 1);
-LP_CONST(uint64_t, LP_INS_JALR_SREG_OFFSET, 1);
-LP_CONST(uint64_t, LP_INS_JALR_EREG_OFFSET, 2);
-LP_CONST(uint64_t, LP_INS_JALR_REG_OFFSET, 3);
+#define LP_INS_JALR_WIDTH 1 + 1
+#define LP_INS_JALR_REG_OFFSET 1
 
-LP_CONST(uint64_t, LP_INS_RET_WIDTH, 1 + 1);
-LP_CONST(uint64_t, LP_INS_RET_REG_OFFSET, 1);
+#define LP_INS_RET_WIDTH 1
 
-LP_CONST(uint64_t, LP_INS_MOV_WIDTH, 1 + 1 + 1);
-LP_CONST(uint64_t, LP_INS_MOV_DST_OFFSET, 1);
-LP_CONST(uint64_t, LP_INS_MOV_SRC_OFFSET, 2);
+#define LP_INS_MV_WIDTH 1 + 1 + 1
+#define LP_INS_MV_DST_OFFSET 1
+#define LP_INS_MV_SRC_OFFSET 2
 
-LP_CONST(uint64_t, LP_INS_LDI_WIDTH, 1 + 1 + 8);
-LP_CONST(uint64_t, LP_INS_LDI_DST_OFFSET, 1);
-LP_CONST(uint64_t, LP_INS_LDI_IMM_OFFSET, 2);
+#define LP_INS_LDI_WIDTH 1 + 1 + 8
+#define LP_INS_LDI_DST_OFFSET 1
+#define LP_INS_LDI_IMM_OFFSET 2
 
-#define LP_INS_ARITH_REG_LAYOUT(name) \
-    LP_CONST(uint64_t, LP_INS_##name##_WIDTH, 1 + 1 + 1 +1); \
-    LP_CONST(uint64_t, LP_INS_##name##_DST_OFFSET, 1); \
-    LP_CONST(uint64_t, LP_INS_##name##_SRC1_OFFSET, 2); \
-    LP_CONST(uint64_t, LP_INS_##name##_SRC2_OFFSET, 3);
+#define LP_INS_ADD_WIDTH 1 + 1 + 1 + 1
+#define LP_INS_ADD_DST_OFFSET 1
+#define LP_INS_ADD_SRC1_OFFSET 2
+#define LP_INS_ADD_SRC2_OFFSET 3
 
-#define LP_INS_ARITH_IMM_LAYOUT(name) \
-    LP_CONST(uint64_t, LP_INS_##name##_WIDTH, 1 + 1 + 1 + 8); \
-    LP_CONST(uint64_t, LP_INS_##name##_DST_OFFSET, 1); \
-    LP_CONST(uint64_t, LP_INS_##name##_SRC_OFFSET, 2); \
-    LP_CONST(uint64_t, LP_INS_##name##_IMM_OFFSET, 3);
+#define LP_INS_SUB_WIDTH 1 + 1 + 1 + 1
+#define LP_INS_SUB_DST_OFFSET 1
+#define LP_INS_SUB_SRC1_OFFSET 2
+#define LP_INS_SUB_SRC2_OFFSET 3
 
-LP_INS_ARITH_REG_LAYOUT(ADD);
-LP_INS_ARITH_IMM_LAYOUT(ADDI);
+#define LP_INS_MUL_WIDTH 1 + 1 + 1 + 1
+#define LP_INS_MUL_DST_OFFSET 1
+#define LP_INS_MUL_SRC1_OFFSET 2
+#define LP_INS_MUL_SRC2_OFFSET 3
 
-LP_INS_ARITH_REG_LAYOUT(SUB);
-LP_INS_ARITH_IMM_LAYOUT(SUBI);
+#define LP_INS_ADDI_WIDTH 1 + 1 + 1 + 8
+#define LP_INS_ADDI_DST_OFFSET 1
+#define LP_INS_ADDI_SRC_OFFSET 2
+#define LP_INS_ADDI_IMM_OFFSET 3
 
-LP_INS_ARITH_REG_LAYOUT(MUL);
-LP_INS_ARITH_IMM_LAYOUT(MULI);
+#define LP_INS_SUBI_WIDTH 1 + 1 + 1 + 8
+#define LP_INS_SUBI_DST_OFFSET 1
+#define LP_INS_SUBI_SRC_OFFSET 2
+#define LP_INS_SUBI_IMM_OFFSET 3
 
-LP_CONST(uint64_t, LP_INS_JMP_WIDTH, 1 + 8);
-LP_CONST(uint64_t, LP_INS_JMP_PC_OFFSET, 1);
+#define LP_INS_MULI_WIDTH 1 + 1 + 1 + 8
+#define LP_INS_MULI_DST_OFFSET 1
+#define LP_INS_MULI_SRC_OFFSET 2
+#define LP_INS_MULI_IMM_OFFSET 3
 
-#define LP_INS_BRANCH_REG_LAYOUT(name) \
-    LP_CONST(uint64_t, LP_INS_##name##_WIDTH, 1 + 1 + 1 + 8); \
-    LP_CONST(uint64_t, LP_INS_##name##_SRC1_OFFSET, 1); \
-    LP_CONST(uint64_t, LP_INS_##name##_SRC2_OFFSET, 2); \
-    LP_CONST(uint64_t, LP_INS_##name##_OFFSET_OFFSET, 3);
+#define LP_INS_JMP_WIDTH 1 + 8
+#define LP_INS_JMP_PC_OFFSET 1
 
-#define LP_INS_BRANCH_IMM_LAYOUT(name) \
-    LP_CONST(uint64_t, LP_INS_##name##_WIDTH, 1 + 1 + 8 + 8); \
-    LP_CONST(uint64_t, LP_INS_##name##_SRC_OFFSET, 1); \
-    LP_CONST(uint64_t, LP_INS_##name##_IMM_OFFSET, 2); \
-    LP_CONST(uint64_t, LP_INS_##name##_OFFSET_OFFSET, 10);
+#define LP_INS_BEQ_WIDTH 1 + 1 + 1 + 8
+#define LP_INS_BEQ_SRC1_OFFSET 1
+#define LP_INS_BEQ_SRC2_OFFSET 2
+#define LP_INS_BEQ_OFFSET_OFFSET 3
 
-LP_INS_BRANCH_REG_LAYOUT(BEQ);
-LP_INS_BRANCH_IMM_LAYOUT(BEQI);
+#define LP_INS_BNE_WIDTH 1 + 1 + 1 + 8
+#define LP_INS_BNE_SRC1_OFFSET 1
+#define LP_INS_BNE_SRC2_OFFSET 2
+#define LP_INS_BNE_OFFSET_OFFSET 3
 
-LP_INS_BRANCH_REG_LAYOUT(BNE);
-LP_INS_BRANCH_IMM_LAYOUT(BNEI);
+#define LP_INS_BGT_WIDTH 1 + 1 + 1 + 8
+#define LP_INS_BGT_SRC1_OFFSET 1
+#define LP_INS_BGT_SRC2_OFFSET 2
+#define LP_INS_BGT_OFFSET_OFFSET 3
 
-LP_INS_BRANCH_REG_LAYOUT(BGT);
-LP_INS_BRANCH_IMM_LAYOUT(BGTI);
+#define LP_INS_BLT_WIDTH 1 + 1 + 1 + 8
+#define LP_INS_BLT_SRC1_OFFSET 1
+#define LP_INS_BLT_SRC2_OFFSET 2
+#define LP_INS_BLT_OFFSET_OFFSET 3
 
-LP_INS_BRANCH_REG_LAYOUT(BLT);
-LP_INS_BRANCH_IMM_LAYOUT(BLTI);
+#define LP_INS_BGE_WIDTH 1 + 1 + 1 + 8
+#define LP_INS_BGE_SRC1_OFFSET 1
+#define LP_INS_BGE_SRC2_OFFSET 2
+#define LP_INS_BGE_OFFSET_OFFSET 3
 
-LP_INS_BRANCH_REG_LAYOUT(BGE);
-LP_INS_BRANCH_IMM_LAYOUT(BGEI);
+#define LP_INS_BLE_WIDTH 1 + 1 + 1 + 8
+#define LP_INS_BLE_SRC1_OFFSET 1
+#define LP_INS_BLE_SRC2_OFFSET 2
+#define LP_INS_BLE_OFFSET_OFFSET 3
 
-LP_INS_BRANCH_REG_LAYOUT(BLE);
-LP_INS_BRANCH_IMM_LAYOUT(BLEI);
+#define LP_INS_BEQI_WIDTH 1 + 1 + 8 + 8
+#define LP_INS_BEQI_SRC_OFFSET 1
+#define LP_INS_BEQI_IMM_OFFSET 2
+#define LP_INS_BEQI_OFFSET_OFFSET 10
 
-LP_CONST(uint64_t, LP_INS_AS_WIDTH, 1 + 8);
-LP_CONST(uint64_t, LP_INS_AS_IMM_OFFSET, 1);
+#define LP_INS_BNEI_WIDTH 1 + 1 + 8 + 8
+#define LP_INS_BNEI_SRC_OFFSET 1
+#define LP_INS_BNEI_IMM_OFFSET 2
+#define LP_INS_BNEI_OFFSET_OFFSET 10
 
-LP_CONST(uint64_t, LP_INS_ASR_WIDTH, 1 + 1);
-LP_CONST(uint64_t, LP_INS_ASR_REG_OFFSET, 1);
+#define LP_INS_BGTI_WIDTH 1 + 1 + 8 + 8
+#define LP_INS_BGTI_SRC_OFFSET 1
+#define LP_INS_BGTI_IMM_OFFSET 2
+#define LP_INS_BGTI_OFFSET_OFFSET 10
 
-LP_CONST(uint64_t, LP_INS_FS_WIDTH, 1 + 8);
-LP_CONST(uint64_t, LP_INS_FS_IMM_OFFSET, 1);
+#define LP_INS_BLTI_WIDTH 1 + 1 + 8 + 8
+#define LP_INS_BLTI_SRC_OFFSET 1
+#define LP_INS_BLTI_IMM_OFFSET 2
+#define LP_INS_BLTI_OFFSET_OFFSET 10
 
-LP_CONST(uint64_t, LP_INS_FSR_WIDTH, 1 + 1);
-LP_CONST(uint64_t, LP_INS_FSR_REG_OFFSET, 1);
+#define LP_INS_BGEI_WIDTH 1 + 1 + 8 + 8
+#define LP_INS_BGEI_SRC_OFFSET 1
+#define LP_INS_BGEI_IMM_OFFSET 2
+#define LP_INS_BGEI_OFFSET_OFFSET 10
 
-LpInstance* lpCreate(uint8_t* program, uint64_t program_size);
+#define LP_INS_BLEI_WIDTH 1 + 1 + 8 + 8
+#define LP_INS_BLEI_SRC_OFFSET 1
+#define LP_INS_BLEI_IMM_OFFSET 2
+#define LP_INS_BLEI_OFFSET_OFFSET 10
+
+#define LP_INS_AS_WIDTH 1 + 8
+#define LP_INS_AS_IMM_OFFSET 1
+
+#define LP_INS_ASR_WIDTH 1 + 1
+#define LP_INS_ASR_REG_OFFSET 1
+
+#define LP_INS_FS_WIDTH 1 + 8
+#define LP_INS_FS_IMM_OFFSET 1
+
+#define LP_INS_FSR_WIDTH 1 + 1
+#define LP_INS_FSR_REG_OFFSET 1
+
+LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_size);
 void lpDestroy(LpInstance* vm);
 
 uint8_t lpRun(LpInstance* vm);
