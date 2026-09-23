@@ -206,25 +206,27 @@ uint8_t lpRun(LpInstance* vm) {
         EXIT_PROGRAM(registers[0]);
     }
 
+    #define INS_JAL_STACK 16
+    #define INS_JAL(new_addr, old_addr) \
+        memcpy(stack + sp, &old_addr, sizeof(old_addr)); \
+        sp += sizeof(old_addr); \
+        memcpy(stack + sp, &bp, sizeof(bp)); \
+        sp += sizeof(bp); \
+        pc = new_addr; \
+        bp = sp; \
+
+
     do_jal: {
         CHECK_PROGRAM(JAL);
 
-        if (sp + 16 > stack_size) {
+        if (sp + INS_JAL_STACK > stack_size) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
         uint64_t new_addr = getNext8(pc + LP_INS_JAL_ADDR_OFFSET, program);
         uint64_t old_addr = pc + LP_INS_JAL_WIDTH;
 
-        pc = new_addr;
-
-        memcpy(stack + sp, &old_addr, sizeof(old_addr));
-        sp += sizeof(old_addr);
-
-        memcpy(stack + sp, &bp, sizeof(bp));
-        sp += sizeof(bp);
-
-        bp = sp;
+        INS_JAL(new_addr, old_addr);
 
         NEXT_INSTRUCTION_DIRECT();
     }
@@ -232,7 +234,7 @@ uint8_t lpRun(LpInstance* vm) {
     do_jalr: {
         CHECK_PROGRAM(JALR);
 
-        if (sp + 16 > stack_size) {
+        if (sp + INS_JAL_STACK > stack_size) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
@@ -240,15 +242,7 @@ uint8_t lpRun(LpInstance* vm) {
         uint64_t new_addr = registers[reg];
         uint64_t old_addr = pc + LP_INS_JALR_WIDTH;
 
-        pc = new_addr;
-
-        memcpy(stack + sp, &old_addr, sizeof(old_addr));
-        sp += sizeof(old_addr);
-
-        memcpy(stack + sp, &bp, sizeof(bp));
-        sp += sizeof(bp);
-
-        bp = sp;
+        INS_JAL(new_addr, old_addr);
 
         NEXT_INSTRUCTION_DIRECT();
     }
@@ -461,16 +455,18 @@ uint8_t lpRun(LpInstance* vm) {
         NEXT_INSTRUCTION(ASR);
     }
 
+    #define INS_FREE(free) \
+        if (free > sp - bp) { \
+            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF); \
+        } \
+        sp -= free;
+
     do_fs: {
         CHECK_PROGRAM(FS);
 
         uint64_t free = getNext8(pc + LP_INS_FS_IMM_OFFSET, program);
+        INS_FREE(free);
 
-        if (free > sp) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
-        }
-
-        sp -= free;
         NEXT_INSTRUCTION(FS);
     }
 
@@ -479,12 +475,8 @@ uint8_t lpRun(LpInstance* vm) {
 
         uint64_t reg = getNext(pc + LP_INS_FSR_REG_OFFSET, program);
         uint64_t free = registers[reg];
+        INS_FREE(free);
 
-        if (free > sp) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
-        }
-
-        sp -= free;
         NEXT_INSTRUCTION(FSR);
     }
 
