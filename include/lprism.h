@@ -43,7 +43,7 @@ typedef enum LP_TYPED_ENUM(uint8_t) {
     LP_INS_RET  = 0x12,
 
     LP_INS_MOV  = 0x20,
-    LP_INS_LDI = 0x21,
+    LP_INS_MOVI = 0x21,
 
     LP_INS_ADD  = 0x30,
     LP_INS_ADDI = 0x31,
@@ -80,6 +80,26 @@ typedef enum LP_TYPED_ENUM(uint8_t) {
     LP_INS_FS = 0x52,
     LP_INS_FSR = 0x53,
 
+    LP_INS_LD_B = 0x60,
+    LP_INS_LD_W = 0x61,
+    LP_INS_LD_D = 0x62,
+    LP_INS_LD_Q = 0x63,
+
+    LP_INS_LDR_B = 0x64,
+    LP_INS_LDR_W = 0x65,
+    LP_INS_LDR_D = 0x66,
+    LP_INS_LDR_Q = 0x67,
+
+    LP_INS_ST_B = 0x68,
+    LP_INS_ST_W = 0x69,
+    LP_INS_ST_D = 0x6A,
+    LP_INS_ST_Q = 0x6B,
+
+    LP_INS_STR_B = 0x6C,
+    LP_INS_STR_W = 0x6D,
+    LP_INS_STR_D = 0x6E,
+    LP_INS_STR_Q = 0x6F,
+
     LP_INS_EXT = 0xEE,
 } LpInstruction;
 
@@ -109,17 +129,17 @@ typedef enum LP_TYPED_ENUM(uint8_t) {
 #define LP_INS_JAL_ADDR_OFFSET 1
 
 #define LP_INS_JALR_WIDTH 1 + 1
-#define LP_INS_JALR_REG_OFFSET 1
+#define LP_INS_JALR_DST_OFFSET 1
 
 #define LP_INS_RET_WIDTH 1
 
-#define LP_INS_MV_WIDTH 1 + 1 + 1
-#define LP_INS_MV_DST_OFFSET 1
-#define LP_INS_MV_SRC_OFFSET 2
+#define LP_INS_MOV_WIDTH 1 + 1 + 1
+#define LP_INS_MOV_DST_OFFSET 1
+#define LP_INS_MOV_SRC_OFFSET 2
 
-#define LP_INS_LDI_WIDTH 1 + 1 + 8
-#define LP_INS_LDI_DST_OFFSET 1
-#define LP_INS_LDI_IMM_OFFSET 2
+#define LP_INS_MOVI_WIDTH 1 + 1 + 8
+#define LP_INS_MOVI_DST_OFFSET 1
+#define LP_INS_MOVI_IMM_OFFSET 2
 
 #define LP_INS_ADD_WIDTH 1 + 1 + 1 + 1
 #define LP_INS_ADD_DST_OFFSET 1
@@ -152,7 +172,7 @@ typedef enum LP_TYPED_ENUM(uint8_t) {
 #define LP_INS_MULI_IMM_OFFSET 3
 
 #define LP_INS_JMP_WIDTH 1 + 8
-#define LP_INS_JMP_PC_OFFSET 1
+#define LP_INS_JMP_ADDR_OFFSET 1
 
 #define LP_INS_BEQ_WIDTH 1 + 1 + 1 + 8
 #define LP_INS_BEQ_SRC1_OFFSET 1
@@ -225,6 +245,70 @@ typedef enum LP_TYPED_ENUM(uint8_t) {
 
 #define LP_INS_FSR_WIDTH 1 + 1
 #define LP_INS_FSR_REG_OFFSET 1
+
+#define LP_INS_LD_B_WIDTH 1 + 1 + 8
+#define LP_INS_LD_B_SRC_OFFSET 1
+#define LP_INS_LD_B_ADDR_OFFSET 2
+
+#define LP_INS_LD_W_WIDTH 1 + 1 + 8
+#define LP_INS_LD_W_SRC_OFFSET 1
+#define LP_INS_LD_W_ADDR_OFFSET 2
+
+#define LP_INS_LD_D_WIDTH 1 + 1 + 8
+#define LP_INS_LD_D_SRC_OFFSET 1
+#define LP_INS_LD_D_ADDR_OFFSET 2
+
+#define LP_INS_LD_Q_WIDTH 1 + 1 + 8
+#define LP_INS_LD_Q_SRC_OFFSET 1
+#define LP_INS_LD_Q_ADDR_OFFSET 2
+
+#define LP_INS_LDR_B_WIDTH 1 + 1 + 1
+#define LP_INS_LDR_B_SRC_OFFSET 1
+#define LP_INS_LDR_B_DST_OFFSET 2
+
+#define LP_INS_LDR_W_WIDTH 1 + 1 + 1
+#define LP_INS_LDR_W_SRC_OFFSET 1
+#define LP_INS_LDR_W_DST_OFFSET 2
+
+#define LP_INS_LDR_D_WIDTH 1 + 1 + 1
+#define LP_INS_LDR_D_SRC_OFFSET 1
+#define LP_INS_LDR_D_DST_OFFSET 2
+
+#define LP_INS_LDR_Q_WIDTH 1 + 1 + 1
+#define LP_INS_LDR_Q_SRC_OFFSET 1
+#define LP_INS_LDR_Q_DST_OFFSET 2
+
+#define LP_INS_ST_B_WIDTH 1 + 1 + 8
+#define LP_INS_ST_B_DST_OFFSET 1
+#define LP_INS_ST_B_ADDR_OFFSET 2
+
+#define LP_INS_ST_W_WIDTH 1 + 1 + 8
+#define LP_INS_ST_W_DST_OFFSET 1
+#define LP_INS_ST_W_ADDR_OFFSET 2
+
+#define LP_INS_ST_D_WIDTH 1 + 1 + 8
+#define LP_INS_ST_D_DST_OFFSET 1
+#define LP_INS_ST_D_ADDR_OFFSET 2
+
+#define LP_INS_ST_Q_WIDTH 1 + 1 + 8
+#define LP_INS_ST_Q_DST_OFFSET 1
+#define LP_INS_ST_Q_ADDR_OFFSET 2
+
+#define LP_INS_STR_B_WIDTH 1 + 1 + 1
+#define LP_INS_STR_B_DST_OFFSET 1
+#define LP_INS_STR_B_SRC_OFFSET 2
+
+#define LP_INS_STR_W_WIDTH 1 + 1 + 1
+#define LP_INS_STR_W_DST_OFFSET 1
+#define LP_INS_STR_W_SRC_OFFSET 2
+
+#define LP_INS_STR_D_WIDTH 1 + 1 + 1
+#define LP_INS_STR_D_DST_OFFSET 1
+#define LP_INS_STR_D_SRC_OFFSET 2
+
+#define LP_INS_STR_Q_WIDTH 1 + 1 + 1
+#define LP_INS_STR_Q_DST_OFFSET 1
+#define LP_INS_STR_Q_SRC_OFFSET 2
 
 LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_size);
 void lpDestroy(LpInstance* vm);
