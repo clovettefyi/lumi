@@ -51,7 +51,7 @@ LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_siz
         goto cleanup;
     }
 
-    stack = malloc(stack_size);
+    stack = calloc(1, stack_size);
     if (stack == nullptr) {
         goto cleanup;
     }
@@ -61,9 +61,10 @@ LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_siz
         goto cleanup;
     }
 
+    vm->registers[LP_BP_REG] = 0;
+    vm->registers[LP_SP_REG] = 0;
+
     vm->stack = stack;
-    vm->sp = 0;
-    vm->bp = 0;
     vm->stack_size = stack_size;
 
     memcpy(programp, program, program_size * sizeof(uint8_t));
@@ -110,8 +111,9 @@ uint8_t lpRun(LpInstance* vm) {
     uint64_t* registers = vm->registers;
 
     uint8_t* stack = vm->stack;
-    uint64_t sp = vm->sp;
-    uint64_t bp = vm->bp;
+
+    #define BP registers[LP_BP_REG]
+    #define SP registers[LP_SP_REG]
 
     const uint64_t stack_size = vm->stack_size;
 
@@ -159,16 +161,15 @@ uint8_t lpRun(LpInstance* vm) {
         [LP_INS_BLE] = &&do_ble,
         [LP_INS_BLEI] = &&do_blei,
 
-        [LP_INS_AS] = &&do_as,
-        [LP_INS_ASR] = &&do_asr,
-
-        [LP_INS_FS] = &&do_fs,
-        [LP_INS_FSR] = &&do_fsr,
-
         [LP_INS_LD_B] = &&do_ld_b,
         [LP_INS_LD_W] = &&do_ld_w,
         [LP_INS_LD_D] = &&do_ld_d,
         [LP_INS_LD_Q] = &&do_ld_q,
+
+        [LP_INS_LDO_B] = &&do_ldo_b,
+        [LP_INS_LDO_W] = &&do_ldo_w,
+        [LP_INS_LDO_D] = &&do_ldo_d,
+        [LP_INS_LDO_Q] = &&do_ldo_q,
 
         [LP_INS_LDR_B] = &&do_ldr_b,
         [LP_INS_LDR_W] = &&do_ldr_w,
@@ -179,6 +180,11 @@ uint8_t lpRun(LpInstance* vm) {
         [LP_INS_ST_W] = &&do_st_w,
         [LP_INS_ST_D] = &&do_st_d,
         [LP_INS_ST_Q] = &&do_st_q,
+
+        [LP_INS_STO_B] = &&do_sto_b,
+        [LP_INS_STO_W] = &&do_sto_w,
+        [LP_INS_STO_D] = &&do_sto_d,
+        [LP_INS_STO_Q] = &&do_sto_q,
 
         [LP_INS_STR_B] = &&do_str_b,
         [LP_INS_STR_W] = &&do_str_w,
@@ -201,8 +207,6 @@ uint8_t lpRun(LpInstance* vm) {
 
     #define EXIT_PROGRAM(exit_code) \
         vm->pc = pc; \
-        vm->sp = sp; \
-        vm->bp = bp; \
         return exit_code;
 
     /*
@@ -228,18 +232,18 @@ uint8_t lpRun(LpInstance* vm) {
 
     #define INS_JAL_STACK 16
     #define INS_JAL(new_addr, old_addr) \
-        memcpy(stack + sp, &old_addr, sizeof(old_addr)); \
-        sp += sizeof(old_addr); \
-        memcpy(stack + sp, &bp, sizeof(bp)); \
-        sp += sizeof(bp); \
+        memcpy(stack + SP, &old_addr, sizeof(old_addr)); \
+        SP += sizeof(old_addr); \
+        memcpy(stack + SP, &BP, sizeof(BP)); \
+        SP += sizeof(BP); \
         pc = new_addr; \
-        bp = sp; \
+        BP = SP; \
 
 
     do_jal: {
         CHECK_PROGRAM(JAL);
 
-        if (sp + INS_JAL_STACK > stack_size) {
+        if (SP + INS_JAL_STACK > stack_size) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
@@ -254,7 +258,7 @@ uint8_t lpRun(LpInstance* vm) {
     do_jalr: {
         CHECK_PROGRAM(JALR);
 
-        if (sp + INS_JAL_STACK > stack_size) {
+        if (SP + INS_JAL_STACK > stack_size) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
@@ -268,19 +272,19 @@ uint8_t lpRun(LpInstance* vm) {
     }
 
     do_ret: {
-        if (bp == 0) {
+        if (BP == 0) {
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
         }
 
         CHECK_PROGRAM(RET);
 
         uint64_t old_bp, old_addr;
-        memcpy(&old_bp, stack + bp - sizeof(old_bp), sizeof(old_bp));
-        bp -= sizeof(old_bp);
-        memcpy(&old_addr, stack + bp - sizeof(old_addr), sizeof(old_addr));
+        memcpy(&old_bp, stack + BP - sizeof(old_bp), sizeof(old_bp));
+        BP -= sizeof(old_bp);
+        memcpy(&old_addr, stack + BP - sizeof(old_addr), sizeof(old_addr));
 
-        bp = old_bp;
-        sp = bp;
+        BP = old_bp;
+        SP = BP;
 
         pc = old_addr;
 
@@ -448,60 +452,8 @@ uint8_t lpRun(LpInstance* vm) {
         INS_BRANCH_IMM_DO(BLEI, <=);
     }
 
-    do_as: {
-        CHECK_PROGRAM(AS);
-
-        uint64_t imm = getNext8(pc + LP_INS_AS_IMM_OFFSET, program);
-
-        if (sp + imm > stack_size) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
-        }
-
-        sp += imm;
-        NEXT_INSTRUCTION(AS);
-    }
-
-    do_asr: {
-        CHECK_PROGRAM(ASR);
-
-        uint8_t reg = getNext(pc + LP_INS_ASR_REG_OFFSET, program);
-        uint64_t alloc = registers[reg];
-
-        if (sp + alloc > stack_size) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
-        }
-
-        sp += alloc;
-        NEXT_INSTRUCTION(ASR);
-    }
-
-    #define INS_FREE_DO(free) \
-        if (free > sp - bp) { \
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF); \
-        } \
-        sp -= free;
-
-    do_fs: {
-        CHECK_PROGRAM(FS);
-
-        uint64_t free = getNext8(pc + LP_INS_FS_IMM_OFFSET, program);
-        INS_FREE_DO(free);
-
-        NEXT_INSTRUCTION(FS);
-    }
-
-    do_fsr: {
-        CHECK_PROGRAM(FSR);
-
-        uint64_t reg = getNext(pc + LP_INS_FSR_REG_OFFSET, program);
-        uint64_t free = registers[reg];
-        INS_FREE_DO(free);
-
-        NEXT_INSTRUCTION(FSR);
-    }
-
     #define INS_LD_SET(addr, src, bytes) \
-        memcpy(stack + bp + addr, registers + src, bytes * sizeof(uint8_t));
+        memcpy(stack + BP + addr, registers + src, bytes * sizeof(uint8_t));
 
     #define INS_LD_DO(bytes, char) \
         uint8_t src = getNext(pc + LP_INS_LD_##char##_SRC_OFFSET, program); \
@@ -532,11 +484,44 @@ uint8_t lpRun(LpInstance* vm) {
         NEXT_INSTRUCTION(LD_Q);
     }
 
+    #define INS_LDO_DO(bytes, char) \
+        uint8_t src = getNext(pc + LP_INS_LDO_##char##_SRC_OFFSET, program); \
+        uint8_t dst = getNext(pc + LP_INS_LDO_##char##_DST_OFFSET, program); \
+        uint64_t addr = registers[dst]; \
+        int64_t offset = getNext8(pc + LP_INS_LDO_##char##_OFFSET_OFFSET, program); \
+        INS_LD_SET(addr + offset, src, bytes)
+
+    do_ldo_b: {
+        CHECK_PROGRAM(LDO_B);
+        INS_LDO_DO(1, B);
+        NEXT_INSTRUCTION(LDO_B);
+    }
+
+    do_ldo_w: {
+        CHECK_PROGRAM(LDO_W);
+        INS_LDO_DO(2, W);
+        NEXT_INSTRUCTION(LDO_W);
+    }
+
+    do_ldo_d: {
+        CHECK_PROGRAM(LDO_D);
+        INS_LDO_DO(4, D);
+        NEXT_INSTRUCTION(LDO_D);
+    }
+
+    do_ldo_q: {
+        CHECK_PROGRAM(LDO_Q);
+        INS_LDO_DO(8, Q);
+        NEXT_INSTRUCTION(LDO_Q);
+    }
+
     #define INS_LDR_DO(bytes, char) \
         uint8_t src = getNext(pc + LP_INS_LDR_##char##_SRC_OFFSET, program); \
         uint8_t dst = getNext(pc + LP_INS_LDR_##char##_DST_OFFSET, program); \
+        uint8_t offset_reg = getNext(pc + LP_INS_LDR_##char##_OFFSET_REG_OFFSET, program); \
         uint64_t addr = registers[dst]; \
-        INS_LD_SET(addr, src, bytes);
+        int64_t offset = registers[offset_reg]; \
+        INS_LD_SET(addr + offset, src, bytes);
 
     do_ldr_b: {
         CHECK_PROGRAM(LDR_B);
@@ -563,7 +548,7 @@ uint8_t lpRun(LpInstance* vm) {
     }
 
     #define INS_ST_SET(dst, addr, bytes) \
-        memcpy(registers + dst, stack + bp + addr, bytes * sizeof(uint8_t)); \
+        memcpy(registers + dst, stack + BP + addr, bytes * sizeof(uint8_t)); \
         memset((uint8_t*)(registers + dst) + bytes * sizeof(uint8_t), 0, sizeof(uint64_t) - bytes * sizeof(uint8_t));
 
     #define INS_ST_DO(bytes, char) \
@@ -595,11 +580,44 @@ uint8_t lpRun(LpInstance* vm) {
         NEXT_INSTRUCTION(ST_Q);
     }
 
+    #define INS_STO_DO(bytes, char) \
+        uint8_t dst = getNext(pc + LP_INS_STO_##char##_DST_OFFSET, program); \
+        uint8_t src = getNext(pc + LP_INS_STO_##char##_SRC_OFFSET, program); \
+        int64_t offset = getNext8(pc + LP_INS_STO_##char##_OFFSET_OFFSET, program); \
+        uint64_t addr = registers[src]; \
+        INS_ST_SET(dst, addr + offset, bytes);
+
+    do_sto_b: {
+        CHECK_PROGRAM(STO_B);
+        INS_STO_DO(1, B);
+        NEXT_INSTRUCTION(STO_B);
+    }
+
+    do_sto_w: {
+        CHECK_PROGRAM(STO_W);
+        INS_STO_DO(2, W);
+        NEXT_INSTRUCTION(STO_W);
+    }
+
+    do_sto_d: {
+        CHECK_PROGRAM(STO_D);
+        INS_STO_DO(4, D);
+        NEXT_INSTRUCTION(STO_D);
+    }
+
+    do_sto_q: {
+        CHECK_PROGRAM(STO_Q);
+        INS_STO_DO(8, Q);
+        NEXT_INSTRUCTION(STO_Q);
+    }
+
     #define INS_STR_DO(bytes, char) \
         uint8_t dst = getNext(pc + LP_INS_STR_##char##_DST_OFFSET, program); \
         uint8_t src = getNext(pc + LP_INS_STR_##char##_SRC_OFFSET, program); \
+        uint8_t offset_reg = getNext(pc + LP_INS_STR_##char##_OFFSET_REG_OFFSET, program); \
         uint64_t addr = registers[src]; \
-        INS_ST_SET(dst, addr, bytes);
+        int64_t offset = registers[offset_reg]; \
+        INS_ST_SET(dst, addr + offset, bytes);
 
     do_str_b: {
         CHECK_PROGRAM(STR_B);
