@@ -8,7 +8,6 @@
 
 #include "lprism.h"
 
-#include <inttypes.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -41,7 +40,25 @@ static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
     return val;
 }
 
+#define PROGRAM_VALIDATION() \
+    if (program == nullptr || \
+        program_size == 0 || \
+        program_size == UINT64_MAX) { \
+        return nullptr; \
+    }
+
+
+#define CLEAN_UP(vm, vm_program, vm_stack) \
+    if (vm != nullptr) { \
+        if (vm_program != nullptr) free(vm_program); \
+        if (vm_stack != nullptr) free(vm_stack); \
+        free(vm); \
+    }
+
+
 LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_size) {
+    PROGRAM_VALIDATION();
+
     LpInstance* vm = nullptr;
     uint8_t* stack = nullptr;
     uint8_t* programp = nullptr;
@@ -51,7 +68,7 @@ LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_siz
         goto cleanup;
     }
 
-    stack = calloc(1, stack_size);
+    stack = malloc(stack_size);
     if (stack == nullptr) {
         goto cleanup;
     }
@@ -61,13 +78,13 @@ LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_siz
         goto cleanup;
     }
 
-    vm->registers[LP_BP_REG] = 0;
-    vm->registers[LP_SP_REG] = 0;
-
     vm->stack = stack;
     vm->stack_size = stack_size;
 
-    memcpy(programp, program, program_size * sizeof(uint8_t));
+    memset(vm->registers, 0, LP_REG_COUNT * sizeof(*vm->registers));
+    memset(vm->stack, 0, vm->stack_size * sizeof(*vm->stack));
+
+    memcpy(programp, program, program_size * sizeof(*program));
     programp[program_size] = 0;
 
     vm->program = programp;
@@ -77,21 +94,55 @@ LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_siz
     return vm;
 
     cleanup: {
-        if (programp != nullptr) free(programp);
-        if (stack != nullptr) free(stack);
-        if (vm != nullptr) free(vm);
+        CLEAN_UP(vm, programp, stack);
         return nullptr;
     }
 }
 
-void lpDestroy(LpInstance* vm) {
+LpInstance* lpReset(LpInstance* vm) {
     if (vm == nullptr) {
-        return;
+        return nullptr;
     }
 
-    free(vm->stack);
+    if (vm->stack == nullptr ||
+        vm->program == nullptr) {
+        return nullptr;
+    }
+
+    memset(vm->registers, 0, LP_REG_COUNT * sizeof(*vm->registers));
+    memset(vm->stack, 0, vm->stack_size * sizeof(*vm->stack));
+    vm->pc = 0;
+
+    return vm;
+}
+
+LpInstance* lpResetNew(LpInstance* vm, uint8_t* program, uint64_t program_size) {
+    PROGRAM_VALIDATION();
+
+    if (lpReset(vm) == nullptr) {
+        return nullptr;
+    }
+
+    if (vm->program == program && vm->program_size == program_size) {
+        return vm;
+    }
+
+    uint8_t* programp = malloc(program_size + 1);
+    if (programp == nullptr) {
+        return nullptr;
+    }
+
+    memcpy(programp, program, program_size * sizeof(*program));
     free(vm->program);
-    free(vm);
+    vm->program = programp;
+    vm->program[program_size] = 0;
+    vm->program_size = program_size;
+
+    return vm;
+}
+
+void lpDestroy(LpInstance* vm) {
+    CLEAN_UP(vm, vm->program, vm->stack);
 }
 
 __attribute__((noinline))
@@ -100,8 +151,9 @@ uint8_t lpRun(LpInstance* vm) {
         return LP_EX_SIG_ERR + LP_SIG_VM_ERR;
     }
 
-    if (vm->program == nullptr) {
-        return LP_EX_SIG_ERR + LP_SIG_PROG_ERR;
+    if (vm->program == nullptr ||
+        vm->stack == nullptr) {
+        return LP_EX_SIG_ERR + LP_SIG_VM_ERR;
     }
 
     const uint8_t* program = vm->program;
@@ -192,26 +244,23 @@ uint8_t lpRun(LpInstance* vm) {
         [LP_INS_STR_Q] = &&do_str_q,
     };
 
-    goto *dispatch_table[program[pc]];
+    #define DISPATCH() \
+        goto *dispatch_table[program[pc]];
 
     #define CHECK_PROGRAM(name) \
         if (!hasNext(pc, program_size, LP_INS_##name##_WIDTH)) { \
             EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_PC); \
         }
 
-    #define NEXT_INSTRUCTION_DIRECT() goto *dispatch_table[program[pc]];
-
     #define NEXT_INSTRUCTION(name) \
         pc += LP_INS_##name##_WIDTH; \
-        goto *dispatch_table[program[pc]];
+        DISPATCH();
 
     #define EXIT_PROGRAM(exit_code) \
         vm->pc = pc; \
         return exit_code;
 
-    /*
-     -- INSTRUCTIONS --
-    */
+    DISPATCH();
 
     do_segv_pc: {
         EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_PC);
@@ -252,7 +301,7 @@ uint8_t lpRun(LpInstance* vm) {
 
         INS_JAL(new_addr, old_addr);
 
-        NEXT_INSTRUCTION_DIRECT();
+        DISPATCH();
     }
 
     do_jalr: {
@@ -268,7 +317,7 @@ uint8_t lpRun(LpInstance* vm) {
 
         INS_JAL(new_addr, old_addr);
 
-        NEXT_INSTRUCTION_DIRECT();
+        DISPATCH();
     }
 
     do_ret: {
@@ -288,7 +337,7 @@ uint8_t lpRun(LpInstance* vm) {
 
         pc = old_addr;
 
-        NEXT_INSTRUCTION_DIRECT();
+        DISPATCH();
     }
 
     do_mov: {
@@ -367,7 +416,7 @@ uint8_t lpRun(LpInstance* vm) {
         uint64_t jmp_pc = getNext8(pc + LP_INS_JMP_ADDR_OFFSET, program);
         pc = jmp_pc;
 
-        NEXT_INSTRUCTION_DIRECT();
+        DISPATCH();
     }
 
     #define INS_BRANCH_REG_DO(name, comparitor) \
@@ -376,10 +425,10 @@ uint8_t lpRun(LpInstance* vm) {
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
         if (registers[src1] comparitor registers[src2]) { \
             pc += LP_INS_##name##_WIDTH + offset; \
-            NEXT_INSTRUCTION_DIRECT(); \
+            DISPATCH(); \
         } \
         pc += LP_INS_##name##_WIDTH; \
-        NEXT_INSTRUCTION_DIRECT();
+        DISPATCH();
 
     #define INS_BRANCH_IMM_DO(name, comparitor) \
         uint8_t src = getNext(pc + LP_INS_##name##_SRC_OFFSET, program); \
@@ -387,10 +436,10 @@ uint8_t lpRun(LpInstance* vm) {
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
         if (registers[src] comparitor imm) { \
             pc += LP_INS_##name##_WIDTH + offset; \
-            NEXT_INSTRUCTION_DIRECT(); \
+            DISPATCH(); \
         } \
         pc += LP_INS_##name##_WIDTH; \
-        NEXT_INSTRUCTION_DIRECT();
+        DISPATCH();
 
     do_beq: {
         CHECK_PROGRAM(BEQ);

@@ -352,6 +352,10 @@ typedef enum LP_TYPED_ENUM(uint8_t) {
 #define LP_INS_STR_Q_OFFSET_REG_OFFSET 3
 
 LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_size);
+
+LpInstance* lpReset(LpInstance* vm);
+LpInstance* lpResetNew(LpInstance* vm, uint8_t* program, uint64_t program_size);
+
 void lpDestroy(LpInstance* vm);
 
 uint8_t lpRun(LpInstance* vm);
