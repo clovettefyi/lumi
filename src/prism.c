@@ -244,39 +244,39 @@ uint8_t lpRun(LpInstance* vm) {
         [LP_INS_STR_Q] = &&do_str_q,
     };
 
-    #define DISPATCH() \
+    #define VM_DISPATCH() \
         goto *dispatch_table[program[pc]];
 
-    #define CHECK_PROGRAM(name) \
+    #define INS_VALIDATION(name) \
         if (!hasNext(pc, program_size, LP_INS_##name##_WIDTH)) { \
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_PC); \
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_PC); \
         }
 
-    #define NEXT_INSTRUCTION(name) \
+    #define INS_STEP(name) \
         pc += LP_INS_##name##_WIDTH; \
-        DISPATCH();
+        VM_DISPATCH();
 
-    #define EXIT_PROGRAM(exit_code) \
+    #define VM_EXIT(exit_code) \
         vm->pc = pc; \
         return exit_code;
 
-    DISPATCH();
+    VM_DISPATCH();
 
     do_segv_pc: {
-        EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_PC);
+        VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_PC);
     }
 
     do_invalid: {
-        EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_ILL);
+        VM_EXIT(LP_EX_SIG_ERR + LP_SIG_ILL);
     }
 
     do_nop: {
-        NEXT_INSTRUCTION(NOP);
+        INS_STEP(NOP);
     }
 
     do_ex: {
         pc += LP_INS_EX_WIDTH;
-        EXIT_PROGRAM(registers[0]);
+        VM_EXIT(registers[0]);
     }
 
     #define INS_JAL_STACK 16
@@ -290,10 +290,10 @@ uint8_t lpRun(LpInstance* vm) {
 
 
     do_jal: {
-        CHECK_PROGRAM(JAL);
+        INS_VALIDATION(JAL);
 
         if (SP + INS_JAL_STACK > stack_size) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
         uint64_t new_addr = getNext8(pc + LP_INS_JAL_ADDR_OFFSET, program);
@@ -301,14 +301,14 @@ uint8_t lpRun(LpInstance* vm) {
 
         INS_JAL(new_addr, old_addr);
 
-        DISPATCH();
+        VM_DISPATCH();
     }
 
     do_jalr: {
-        CHECK_PROGRAM(JALR);
+        INS_VALIDATION(JALR);
 
         if (SP + INS_JAL_STACK > stack_size) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
         uint8_t reg = getNext(pc + LP_INS_JALR_DST_OFFSET, program);
@@ -317,15 +317,15 @@ uint8_t lpRun(LpInstance* vm) {
 
         INS_JAL(new_addr, old_addr);
 
-        DISPATCH();
+        VM_DISPATCH();
     }
 
     do_ret: {
         if (BP == 0) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
         }
 
-        CHECK_PROGRAM(RET);
+        INS_VALIDATION(RET);
 
         uint64_t old_bp, old_addr;
         memcpy(&old_bp, stack + BP - sizeof(old_bp), sizeof(old_bp));
@@ -337,29 +337,29 @@ uint8_t lpRun(LpInstance* vm) {
 
         pc = old_addr;
 
-        DISPATCH();
+        VM_DISPATCH();
     }
 
     do_mov: {
-        CHECK_PROGRAM(MOV);
+        INS_VALIDATION(MOV);
 
         uint8_t dst = getNext(pc + LP_INS_MOV_DST_OFFSET, program);
         uint8_t src = getNext(pc + LP_INS_MOV_SRC_OFFSET, program);
 
         registers[dst] = registers[src];
 
-        NEXT_INSTRUCTION(MOV);
+        INS_STEP(MOV);
     }
 
     do_movi: {
-        CHECK_PROGRAM(MOVI);
+        INS_VALIDATION(MOVI);
 
         uint8_t dst = getNext(pc + LP_INS_MOVI_DST_OFFSET, program);
         uint64_t imm = getNext8(pc + LP_INS_MOVI_IMM_OFFSET, program);
 
         registers[dst] = imm;
 
-        NEXT_INSTRUCTION(MOVI);
+        INS_STEP(MOVI);
     }
 
     #define INS_ARITH_REG_DO(name, op) \
@@ -375,48 +375,48 @@ uint8_t lpRun(LpInstance* vm) {
         registers[dst] = registers[src] op imm; \
 
     do_add: {
-        CHECK_PROGRAM(ADD);
+        INS_VALIDATION(ADD);
         INS_ARITH_REG_DO(ADD, +);
-        NEXT_INSTRUCTION(ADD);
+        INS_STEP(ADD);
     }
 
     do_addi: {
-        CHECK_PROGRAM(ADDI);
+        INS_VALIDATION(ADDI);
         INS_ARITH_IMM_DO(ADDI, +);
-        NEXT_INSTRUCTION(ADDI);
+        INS_STEP(ADDI);
     }
 
     do_sub: {
-        CHECK_PROGRAM(SUB);
+        INS_VALIDATION(SUB);
         INS_ARITH_REG_DO(SUB, -);
-        NEXT_INSTRUCTION(SUB);
+        INS_STEP(SUB);
     }
 
     do_subi: {
-        CHECK_PROGRAM(SUBI);
+        INS_VALIDATION(SUBI);
         INS_ARITH_IMM_DO(SUBI, -);
-        NEXT_INSTRUCTION(SUBI);
+        INS_STEP(SUBI);
     }
 
     do_mul: {
-        CHECK_PROGRAM(MUL);
+        INS_VALIDATION(MUL);
         INS_ARITH_REG_DO(MUL, *);
-        NEXT_INSTRUCTION(MUL);
+        INS_STEP(MUL);
     }
 
     do_muli: {
-        CHECK_PROGRAM(MULI);
+        INS_VALIDATION(MULI);
         INS_ARITH_IMM_DO(MULI, *);
-        NEXT_INSTRUCTION(MULI);
+        INS_STEP(MULI);
     }
 
     do_jmp: {
-        CHECK_PROGRAM(JMP);
+        INS_VALIDATION(JMP);
 
         uint64_t jmp_pc = getNext8(pc + LP_INS_JMP_ADDR_OFFSET, program);
         pc = jmp_pc;
 
-        DISPATCH();
+        VM_DISPATCH();
     }
 
     #define INS_BRANCH_REG_DO(name, comparitor) \
@@ -425,10 +425,10 @@ uint8_t lpRun(LpInstance* vm) {
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
         if (registers[src1] comparitor registers[src2]) { \
             pc += LP_INS_##name##_WIDTH + offset; \
-            DISPATCH(); \
+            VM_DISPATCH(); \
         } \
         pc += LP_INS_##name##_WIDTH; \
-        DISPATCH();
+        VM_DISPATCH();
 
     #define INS_BRANCH_IMM_DO(name, comparitor) \
         uint8_t src = getNext(pc + LP_INS_##name##_SRC_OFFSET, program); \
@@ -436,68 +436,68 @@ uint8_t lpRun(LpInstance* vm) {
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
         if (registers[src] comparitor imm) { \
             pc += LP_INS_##name##_WIDTH + offset; \
-            DISPATCH(); \
+            VM_DISPATCH(); \
         } \
         pc += LP_INS_##name##_WIDTH; \
-        DISPATCH();
+        VM_DISPATCH();
 
     do_beq: {
-        CHECK_PROGRAM(BEQ);
+        INS_VALIDATION(BEQ);
         INS_BRANCH_REG_DO(BEQ, ==);
     }
 
     do_beqi: {
-        CHECK_PROGRAM(BEQI);
+        INS_VALIDATION(BEQI);
         INS_BRANCH_IMM_DO(BEQI, ==);
     }
 
     do_bne: {
-        CHECK_PROGRAM(BNE);
+        INS_VALIDATION(BNE);
         INS_BRANCH_REG_DO(BNE, !=);
     }
 
     do_bnei: {
-        CHECK_PROGRAM(BNEI);
+        INS_VALIDATION(BNEI);
         INS_BRANCH_IMM_DO(BNEI, !=);
     }
 
     do_bgt: {
-        CHECK_PROGRAM(BGT);
+        INS_VALIDATION(BGT);
         INS_BRANCH_REG_DO(BGT, >);
     }
 
     do_bgti: {
-        CHECK_PROGRAM(BGTI);
+        INS_VALIDATION(BGTI);
         INS_BRANCH_IMM_DO(BGTI, >);
     }
 
     do_blt: {
-        CHECK_PROGRAM(BLT);
+        INS_VALIDATION(BLT);
         INS_BRANCH_REG_DO(BLT, <);
     }
 
     do_blti: {
-        CHECK_PROGRAM(BLTI);
+        INS_VALIDATION(BLTI);
         INS_BRANCH_IMM_DO(BLTI, <);
     }
 
     do_bge: {
-        CHECK_PROGRAM(BGE);
+        INS_VALIDATION(BGE);
         INS_BRANCH_REG_DO(BGE, >=);
     }
 
     do_bgei: {
-        CHECK_PROGRAM(BGEI);
+        INS_VALIDATION(BGEI);
         INS_BRANCH_IMM_DO(BGEI, >=);
     }
 
     do_ble: {
-        CHECK_PROGRAM(BLE);
+        INS_VALIDATION(BLE);
         INS_BRANCH_REG_DO(BLE, <=);
     }
 
     do_blei: {
-        CHECK_PROGRAM(BLEI);
+        INS_VALIDATION(BLEI);
         INS_BRANCH_IMM_DO(BLEI, <=);
     }
 
@@ -510,27 +510,27 @@ uint8_t lpRun(LpInstance* vm) {
         INS_LD_SET(addr, src, bytes);
 
     do_ld_b: {
-        CHECK_PROGRAM(LD_B);
+        INS_VALIDATION(LD_B);
         INS_LD_DO(1, B);
-        NEXT_INSTRUCTION(LD_B);
+        INS_STEP(LD_B);
     }
 
     do_ld_w: {
-        CHECK_PROGRAM(LD_W);
+        INS_VALIDATION(LD_W);
         INS_LD_DO(2, W);
-        NEXT_INSTRUCTION(LD_W);
+        INS_STEP(LD_W);
     }
 
     do_ld_d: {
-        CHECK_PROGRAM(LD_D);
+        INS_VALIDATION(LD_D);
         INS_LD_DO(4, D);
-        NEXT_INSTRUCTION(LD_D);
+        INS_STEP(LD_D);
     }
 
     do_ld_q: {
-        CHECK_PROGRAM(LD_Q);
+        INS_VALIDATION(LD_Q);
         INS_LD_DO(8, Q);
-        NEXT_INSTRUCTION(LD_Q);
+        INS_STEP(LD_Q);
     }
 
     #define INS_LDO_DO(bytes, char) \
@@ -541,27 +541,27 @@ uint8_t lpRun(LpInstance* vm) {
         INS_LD_SET(addr + offset, src, bytes)
 
     do_ldo_b: {
-        CHECK_PROGRAM(LDO_B);
+        INS_VALIDATION(LDO_B);
         INS_LDO_DO(1, B);
-        NEXT_INSTRUCTION(LDO_B);
+        INS_STEP(LDO_B);
     }
 
     do_ldo_w: {
-        CHECK_PROGRAM(LDO_W);
+        INS_VALIDATION(LDO_W);
         INS_LDO_DO(2, W);
-        NEXT_INSTRUCTION(LDO_W);
+        INS_STEP(LDO_W);
     }
 
     do_ldo_d: {
-        CHECK_PROGRAM(LDO_D);
+        INS_VALIDATION(LDO_D);
         INS_LDO_DO(4, D);
-        NEXT_INSTRUCTION(LDO_D);
+        INS_STEP(LDO_D);
     }
 
     do_ldo_q: {
-        CHECK_PROGRAM(LDO_Q);
+        INS_VALIDATION(LDO_Q);
         INS_LDO_DO(8, Q);
-        NEXT_INSTRUCTION(LDO_Q);
+        INS_STEP(LDO_Q);
     }
 
     #define INS_LDR_DO(bytes, char) \
@@ -573,27 +573,27 @@ uint8_t lpRun(LpInstance* vm) {
         INS_LD_SET(addr + offset, src, bytes);
 
     do_ldr_b: {
-        CHECK_PROGRAM(LDR_B);
+        INS_VALIDATION(LDR_B);
         INS_LDR_DO(1, B);
-        NEXT_INSTRUCTION(LDR_B);
+        INS_STEP(LDR_B);
     }
 
     do_ldr_w: {
-        CHECK_PROGRAM(LDR_W);
+        INS_VALIDATION(LDR_W);
         INS_LDR_DO(2, W);
-        NEXT_INSTRUCTION(LDR_W);
+        INS_STEP(LDR_W);
     }
 
     do_ldr_d: {
-        CHECK_PROGRAM(LDR_D);
+        INS_VALIDATION(LDR_D);
         INS_LDR_DO(4, D);
-        NEXT_INSTRUCTION(LDR_D);
+        INS_STEP(LDR_D);
     }
 
     do_ldr_q: {
-        CHECK_PROGRAM(LDR_Q);
+        INS_VALIDATION(LDR_Q);
         INS_LDR_DO(8, Q);
-        NEXT_INSTRUCTION(LDR_Q);
+        INS_STEP(LDR_Q);
     }
 
     #define INS_ST_SET(dst, addr, bytes) \
@@ -606,27 +606,27 @@ uint8_t lpRun(LpInstance* vm) {
         INS_ST_SET(dst, addr, bytes);
 
     do_st_b: {
-        CHECK_PROGRAM(ST_B);
+        INS_VALIDATION(ST_B);
         INS_ST_DO(1, B);
-        NEXT_INSTRUCTION(ST_B);
+        INS_STEP(ST_B);
     }
 
     do_st_w: {
-        CHECK_PROGRAM(ST_W);
+        INS_VALIDATION(ST_W);
         INS_ST_DO(2, W);
-        NEXT_INSTRUCTION(ST_W);
+        INS_STEP(ST_W);
     }
 
     do_st_d: {
-        CHECK_PROGRAM(ST_D);
+        INS_VALIDATION(ST_D);
         INS_ST_DO(4, D);
-        NEXT_INSTRUCTION(ST_D);
+        INS_STEP(ST_D);
     }
 
     do_st_q: {
-        CHECK_PROGRAM(ST_Q);
+        INS_VALIDATION(ST_Q);
         INS_ST_DO(8, Q);
-        NEXT_INSTRUCTION(ST_Q);
+        INS_STEP(ST_Q);
     }
 
     #define INS_STO_DO(bytes, char) \
@@ -637,27 +637,27 @@ uint8_t lpRun(LpInstance* vm) {
         INS_ST_SET(dst, addr + offset, bytes);
 
     do_sto_b: {
-        CHECK_PROGRAM(STO_B);
+        INS_VALIDATION(STO_B);
         INS_STO_DO(1, B);
-        NEXT_INSTRUCTION(STO_B);
+        INS_STEP(STO_B);
     }
 
     do_sto_w: {
-        CHECK_PROGRAM(STO_W);
+        INS_VALIDATION(STO_W);
         INS_STO_DO(2, W);
-        NEXT_INSTRUCTION(STO_W);
+        INS_STEP(STO_W);
     }
 
     do_sto_d: {
-        CHECK_PROGRAM(STO_D);
+        INS_VALIDATION(STO_D);
         INS_STO_DO(4, D);
-        NEXT_INSTRUCTION(STO_D);
+        INS_STEP(STO_D);
     }
 
     do_sto_q: {
-        CHECK_PROGRAM(STO_Q);
+        INS_VALIDATION(STO_Q);
         INS_STO_DO(8, Q);
-        NEXT_INSTRUCTION(STO_Q);
+        INS_STEP(STO_Q);
     }
 
     #define INS_STR_DO(bytes, char) \
@@ -669,26 +669,26 @@ uint8_t lpRun(LpInstance* vm) {
         INS_ST_SET(dst, addr + offset, bytes);
 
     do_str_b: {
-        CHECK_PROGRAM(STR_B);
+        INS_VALIDATION(STR_B);
         INS_STR_DO(1, B);
-        NEXT_INSTRUCTION(STR_B);
+        INS_STEP(STR_B);
     }
 
     do_str_w: {
-        CHECK_PROGRAM(STR_W);
+        INS_VALIDATION(STR_W);
         INS_STR_DO(2, W);
-        NEXT_INSTRUCTION(STR_W);
+        INS_STEP(STR_W);
     }
 
     do_str_d: {
-        CHECK_PROGRAM(STR_D);
+        INS_VALIDATION(STR_D);
         INS_STR_DO(4, D);
-        NEXT_INSTRUCTION(STR_D);
+        INS_STEP(STR_D);
     }
 
     do_str_q: {
-        CHECK_PROGRAM(STR_Q);
+        INS_VALIDATION(STR_Q);
         INS_STR_DO(8, Q);
-        NEXT_INSTRUCTION(STR_Q);
+        INS_STEP(STR_Q);
     }
  }
