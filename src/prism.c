@@ -8,19 +8,10 @@
 
 #include "lprism.h"
 
-#include <inttypes.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <stddef.h>
-
-constexpr static size_t GSTACK_SIZE = 1024 * 1024;
-constexpr static uint64_t DATA_SLOTS = GSTACK_SIZE / sizeof(uint64_t);
-constexpr static uint64_t CFRAME_WIDTH = sizeof(LpCFrame) / sizeof(uint64_t);
-
-/*
- -- HELPER FUNCTIONS --
-*/
 
 static inline bool hasNext(uint64_t pc, uint64_t program_size, uint64_t bytes) {
     if (pc + bytes > program_size) return false;
@@ -49,13 +40,27 @@ static inline uint64_t getNext8(uint64_t pc, const uint8_t* program) {
     return val;
 }
 
-/*
- -- CREATE VM --
-*/
+#define PROGRAM_VALIDATION() \
+    if (program == nullptr || \
+        program_size == 0 || \
+        program_size == UINT64_MAX) { \
+        return nullptr; \
+    }
 
-LpInstance* lpCreate(uint8_t* program, uint64_t program_size) {
+
+#define CLEAN_UP(vm, vm_program, vm_stack) \
+    if (vm != nullptr) { \
+        if (vm_program != nullptr) free(vm_program); \
+        if (vm_stack != nullptr) free(vm_stack); \
+        free(vm); \
+    }
+
+
+LpInstance* lpCreate(uint64_t stack_size, uint8_t* program, uint64_t program_size) {
+    PROGRAM_VALIDATION();
+
     LpInstance* vm = nullptr;
-    uint64_t* gstack = nullptr;
+    uint8_t* stack = nullptr;
     uint8_t* programp = nullptr;
 
     vm = malloc(sizeof(LpInstance));
@@ -63,8 +68,8 @@ LpInstance* lpCreate(uint8_t* program, uint64_t program_size) {
         goto cleanup;
     }
 
-    gstack = malloc(GSTACK_SIZE);
-    if (gstack == nullptr) {
+    stack = malloc(stack_size);
+    if (stack == nullptr) {
         goto cleanup;
     }
 
@@ -73,16 +78,13 @@ LpInstance* lpCreate(uint8_t* program, uint64_t program_size) {
         goto cleanup;
     }
 
-    vm->gstack = gstack;
+    vm->stack = stack;
+    vm->stack_size = stack_size;
 
-    vm->cstack.cframes = (LpCFrame*)gstack;
-    vm->cstack.fp = 0;
+    memset(vm->registers, 0, LP_REG_COUNT * sizeof(*vm->registers));
+    memset(vm->stack, 0, vm->stack_size * sizeof(*vm->stack));
 
-    vm->dstack.data = gstack + DATA_SLOTS - 1;
-    vm->dstack.sp = 0;
-    vm->dstack.bp = 0;
-
-    memcpy(programp, program, program_size * sizeof(uint8_t));
+    memcpy(programp, program, program_size * sizeof(*program));
     programp[program_size] = 0;
 
     vm->program = programp;
@@ -92,29 +94,56 @@ LpInstance* lpCreate(uint8_t* program, uint64_t program_size) {
     return vm;
 
     cleanup: {
-        if (programp != nullptr) free(programp);
-        if (gstack != nullptr) free(gstack);
-        if (vm != nullptr) free(vm);
+        CLEAN_UP(vm, programp, stack);
         return nullptr;
     }
 }
 
-/*
- -- DESTROY VM --
-*/
-
-void lpDestroy(LpInstance* vm) {
+LpInstance* lpReset(LpInstance* vm) {
     if (vm == nullptr) {
-        return;
+        return nullptr;
     }
 
-    free(vm->gstack);
-    free(vm);
+    if (vm->stack == nullptr ||
+        vm->program == nullptr) {
+        return nullptr;
+    }
+
+    memset(vm->registers, 0, LP_REG_COUNT * sizeof(*vm->registers));
+    memset(vm->stack, 0, vm->stack_size * sizeof(*vm->stack));
+    vm->pc = 0;
+
+    return vm;
 }
 
-/*
- -- RUN VM --
-*/
+LpInstance* lpResetNew(LpInstance* vm, uint8_t* program, uint64_t program_size) {
+    PROGRAM_VALIDATION();
+
+    if (lpReset(vm) == nullptr) {
+        return nullptr;
+    }
+
+    if (vm->program == program && vm->program_size == program_size) {
+        return vm;
+    }
+
+    uint8_t* programp = malloc(program_size + 1);
+    if (programp == nullptr) {
+        return nullptr;
+    }
+
+    memcpy(programp, program, program_size * sizeof(*program));
+    free(vm->program);
+    vm->program = programp;
+    vm->program[program_size] = 0;
+    vm->program_size = program_size;
+
+    return vm;
+}
+
+void lpDestroy(LpInstance* vm) {
+    CLEAN_UP(vm, vm->program, vm->stack);
+}
 
 __attribute__((noinline))
 uint8_t lpRun(LpInstance* vm) {
@@ -122,22 +151,23 @@ uint8_t lpRun(LpInstance* vm) {
         return LP_EX_SIG_ERR + LP_SIG_VM_ERR;
     }
 
-    if (vm->program == nullptr) {
-        return LP_EX_SIG_ERR + LP_SIG_PROG_ERR;
+    if (vm->program == nullptr ||
+        vm->stack == nullptr) {
+        return LP_EX_SIG_ERR + LP_SIG_VM_ERR;
     }
 
-    // issue: some hoisted variables may cause performance issue
-    // worth a review at a later date
     const uint8_t* program = vm->program;
     const uint64_t program_size = vm->program_size;
     uint64_t pc = vm->pc;
 
-    uint64_t fp = vm->cstack.fp;
-    LpCFrame* current_cf = vm->cstack.cframes + fp;
+    uint64_t* registers = vm->registers;
 
-    uint64_t* dstack = vm->dstack.data;
-    uint64_t sp = vm->dstack.sp;
-    uint64_t bp = vm->dstack.bp;
+    uint8_t* stack = vm->stack;
+
+    #define BP registers[LP_BP_REG]
+    #define SP registers[LP_SP_REG]
+
+    const uint64_t stack_size = vm->stack_size;
 
     static const void* dispatch_table[] = {
         [1 ... UINT8_MAX] = &&do_invalid,
@@ -152,7 +182,7 @@ uint8_t lpRun(LpInstance* vm) {
         [LP_INS_RET] = &&do_ret,
 
         [LP_INS_MOV] = &&do_mov,
-        [LP_INS_LDI] = &&do_ldi,
+        [LP_INS_MOVI] = &&do_movi,
 
         [LP_INS_ADD] = &&do_add,
         [LP_INS_ADDI] = &&do_addi,
@@ -183,373 +213,482 @@ uint8_t lpRun(LpInstance* vm) {
         [LP_INS_BLE] = &&do_ble,
         [LP_INS_BLEI] = &&do_blei,
 
-        [LP_INS_AS] = &&do_as,
-        [LP_INS_ASR] = &&do_asr,
+        [LP_INS_LD_B] = &&do_ld_b,
+        [LP_INS_LD_W] = &&do_ld_w,
+        [LP_INS_LD_D] = &&do_ld_d,
+        [LP_INS_LD_Q] = &&do_ld_q,
 
-        [LP_INS_FS] = &&do_fs,
-        [LP_INS_FSR] = &&do_fsr,
+        [LP_INS_LDO_B] = &&do_ldo_b,
+        [LP_INS_LDO_W] = &&do_ldo_w,
+        [LP_INS_LDO_D] = &&do_ldo_d,
+        [LP_INS_LDO_Q] = &&do_ldo_q,
+
+        [LP_INS_LDR_B] = &&do_ldr_b,
+        [LP_INS_LDR_W] = &&do_ldr_w,
+        [LP_INS_LDR_D] = &&do_ldr_d,
+        [LP_INS_LDR_Q] = &&do_ldr_q,
+
+        [LP_INS_ST_B] = &&do_st_b,
+        [LP_INS_ST_W] = &&do_st_w,
+        [LP_INS_ST_D] = &&do_st_d,
+        [LP_INS_ST_Q] = &&do_st_q,
+
+        [LP_INS_STO_B] = &&do_sto_b,
+        [LP_INS_STO_W] = &&do_sto_w,
+        [LP_INS_STO_D] = &&do_sto_d,
+        [LP_INS_STO_Q] = &&do_sto_q,
+
+        [LP_INS_STR_B] = &&do_str_b,
+        [LP_INS_STR_W] = &&do_str_w,
+        [LP_INS_STR_D] = &&do_str_d,
+        [LP_INS_STR_Q] = &&do_str_q,
     };
 
-    goto *dispatch_table[program[pc]];
-
-    #define CHECK_PROGRAM(name) \
-        if (!hasNext(pc, program_size, LP_INS_##name##_WIDTH)) { \
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_PC); \
-        }
-
-    #define NEXT_INSTRUCTION_DIRECT() goto *dispatch_table[program[pc]];
-
-    #define NEXT_INSTRUCTION(name) \
-        pc += LP_INS_##name##_WIDTH; \
+    #define VM_DISPATCH() \
         goto *dispatch_table[program[pc]];
 
-    #define EXIT_PROGRAM(exit_code) \
-        vm->cstack.fp = fp; \
-        vm->dstack.sp = sp; \
-        vm->dstack.bp = bp; \
+    #define INS_VALIDATION(name) \
+        if (!hasNext(pc, program_size, LP_INS_##name##_WIDTH)) { \
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_PC); \
+        }
+
+    #define INS_STEP(name) \
+        pc += LP_INS_##name##_WIDTH; \
+        VM_DISPATCH();
+
+    #define VM_EXIT(exit_code) \
         vm->pc = pc; \
         return exit_code;
 
-    /*
-     -- INSTRUCTIONS --
-    */
+    VM_DISPATCH();
 
     do_segv_pc: {
-        EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_PC);
+        VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_PC);
     }
 
     do_invalid: {
-        EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_ILL);
+        VM_EXIT(LP_EX_SIG_ERR + LP_SIG_ILL);
     }
 
     do_nop: {
-        NEXT_INSTRUCTION(NOP);
+        INS_STEP(NOP);
     }
 
     do_ex: {
         pc += LP_INS_EX_WIDTH;
-        EXIT_PROGRAM(current_cf->registers[0]);
+        VM_EXIT(registers[0]);
     }
 
+    #define INS_JAL_STACK 16
+    #define INS_JAL(new_addr, old_addr) \
+        memcpy(stack + SP, &old_addr, sizeof(old_addr)); \
+        SP += sizeof(old_addr); \
+        memcpy(stack + SP, &BP, sizeof(BP)); \
+        SP += sizeof(BP); \
+        pc = new_addr; \
+        BP = SP; \
+
+
     do_jal: {
-        CHECK_PROGRAM(JAL);
+        INS_VALIDATION(JAL);
 
-        if ((fp + 2) * CFRAME_WIDTH + (sp + 1) > DATA_SLOTS) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
+        if (SP + INS_JAL_STACK > stack_size) {
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
-        uint8_t start_reg = getNext(pc + LP_INS_JAL_SREG_OFFSET, program);
-        uint8_t end_reg = getNext(pc + LP_INS_JAL_EREG_OFFSET, program);
+        uint64_t new_addr = getNext8(pc + LP_INS_JAL_ADDR_OFFSET, program);
+        uint64_t old_addr = pc + LP_INS_JAL_WIDTH;
 
-        if (start_reg > end_reg) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_ILL);
-        }
+        INS_JAL(new_addr, old_addr);
 
-        uint64_t jmp_pc = getNext8(pc + LP_INS_JAL_PC_OFFSET, program);
-        uint64_t ret_pc = pc + LP_INS_JAL_WIDTH;
-
-        LpCFrame* caller_cf = current_cf;
-        fp++;
-        current_cf++;
-        LpCFrame* callee_cf = current_cf;
-
-        callee_cf->pc = ret_pc;
-
-        size_t reg_count = end_reg - start_reg + 1;
-
-        uint64_t* out_regs = caller_cf->registers + start_reg;
-        uint64_t* in_regs = callee_cf->registers;
-
-        memcpy(in_regs, out_regs, reg_count * sizeof(uint64_t));
-
-        pc = jmp_pc;
-
-        *(dstack - sp++) = bp;
-        bp = sp;
-
-        NEXT_INSTRUCTION_DIRECT();
+        VM_DISPATCH();
     }
 
     do_jalr: {
-        CHECK_PROGRAM(JALR);
+        INS_VALIDATION(JALR);
 
-        if ((fp + 2) * CFRAME_WIDTH + (sp + 1) > DATA_SLOTS) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
+        if (SP + INS_JAL_STACK > stack_size) {
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
         }
 
-        uint8_t start_reg = getNext(pc + LP_INS_JALR_SREG_OFFSET, program);
-        uint8_t end_reg = getNext(pc + LP_INS_JALR_EREG_OFFSET, program);
+        uint8_t reg = getNext(pc + LP_INS_JALR_DST_OFFSET, program);
+        uint64_t new_addr = registers[reg];
+        uint64_t old_addr = pc + LP_INS_JALR_WIDTH;
 
-        if (start_reg > end_reg) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_ILL);
-        }
+        INS_JAL(new_addr, old_addr);
 
-        uint8_t reg = getNext(pc + LP_INS_JALR_REG_OFFSET, vm->program);
-        uint64_t jmp_pc = current_cf->registers[reg];
-        uint64_t ret_pc = pc + LP_INS_JALR_WIDTH;
-
-        LpCFrame* caller_cf = current_cf;
-        fp++;
-        current_cf++;
-        LpCFrame* callee_cf = current_cf;
-
-        callee_cf->pc = ret_pc;
-
-        size_t reg_count = end_reg - start_reg + 1;
-
-        uint64_t* out_regs = caller_cf->registers + start_reg;
-        uint64_t* in_regs = callee_cf->registers;
-
-        memcpy(in_regs, out_regs, reg_count * sizeof(uint64_t));
-
-        pc = jmp_pc;
-
-        *(dstack - sp++) = bp;
-        bp = sp;
-
-        NEXT_INSTRUCTION_DIRECT();
+        VM_DISPATCH();
     }
 
     do_ret: {
-        if (fp == 0) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_ILL);
+        if (BP == 0) {
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
         }
 
-        CHECK_PROGRAM(RET);
+        INS_VALIDATION(RET);
 
-        uint64_t* ret_reg = current_cf->registers + getNext(pc + LP_INS_RET_REG_OFFSET, program);
+        uint64_t old_bp, old_addr;
+        memcpy(&old_bp, stack + BP - sizeof(old_bp), sizeof(old_bp));
+        BP -= sizeof(old_bp);
+        memcpy(&old_addr, stack + BP - sizeof(old_addr), sizeof(old_addr));
 
-        pc = current_cf->pc;
-        fp--;
-        current_cf--;
+        BP = old_bp;
+        SP = BP;
 
-        memcpy(current_cf->registers, ret_reg, sizeof(uint64_t));
+        pc = old_addr;
 
-        sp = bp - 1;
-        bp = *(dstack - sp);
-
-        NEXT_INSTRUCTION_DIRECT();
+        VM_DISPATCH();
     }
 
     do_mov: {
-        CHECK_PROGRAM(MOV);
+        INS_VALIDATION(MOV);
 
         uint8_t dst = getNext(pc + LP_INS_MOV_DST_OFFSET, program);
         uint8_t src = getNext(pc + LP_INS_MOV_SRC_OFFSET, program);
-        LpCFrame* cf = current_cf;
 
-        cf->registers[dst] = cf->registers[src];
+        registers[dst] = registers[src];
 
-        NEXT_INSTRUCTION(MOV);
+        INS_STEP(MOV);
     }
 
-    do_ldi: {
-        CHECK_PROGRAM(LDI);
+    do_movi: {
+        INS_VALIDATION(MOVI);
 
-        uint8_t dst = getNext(pc + LP_INS_LDI_DST_OFFSET, program);
-        uint64_t imm = getNext8(pc + LP_INS_LDI_IMM_OFFSET, program);
-        LpCFrame* cf = current_cf;
+        uint8_t dst = getNext(pc + LP_INS_MOVI_DST_OFFSET, program);
+        uint64_t imm = getNext8(pc + LP_INS_MOVI_IMM_OFFSET, program);
 
-        cf->registers[dst] = imm;
+        registers[dst] = imm;
 
-        NEXT_INSTRUCTION(LDI);
+        INS_STEP(MOVI);
     }
 
     #define INS_ARITH_REG_DO(name, op) \
         uint8_t dst = getNext(pc + LP_INS_##name##_DST_OFFSET, program); \
         uint8_t src1 = getNext(pc + LP_INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(pc + LP_INS_##name##_SRC2_OFFSET, program); \
-        current_cf->registers[dst] = current_cf->registers[src1] op current_cf->registers[src2]; \
+        registers[dst] = registers[src1] op registers[src2]; \
 
     #define INS_ARITH_IMM_DO(name, op) \
         uint8_t dst = getNext(pc + LP_INS_##name##_DST_OFFSET, program); \
         uint8_t src = getNext(pc + LP_INS_##name##_SRC_OFFSET, program); \
         uint64_t imm = getNext8(pc + LP_INS_##name##_IMM_OFFSET, program); \
-        current_cf->registers[dst] = current_cf->registers[src] op imm; \
+        registers[dst] = registers[src] op imm; \
 
     do_add: {
-        CHECK_PROGRAM(ADD);
+        INS_VALIDATION(ADD);
         INS_ARITH_REG_DO(ADD, +);
-        NEXT_INSTRUCTION(ADD);
+        INS_STEP(ADD);
     }
 
     do_addi: {
-        CHECK_PROGRAM(ADDI);
+        INS_VALIDATION(ADDI);
         INS_ARITH_IMM_DO(ADDI, +);
-        NEXT_INSTRUCTION(ADDI);
+        INS_STEP(ADDI);
     }
 
     do_sub: {
-        CHECK_PROGRAM(SUB);
+        INS_VALIDATION(SUB);
         INS_ARITH_REG_DO(SUB, -);
-        NEXT_INSTRUCTION(SUB);
+        INS_STEP(SUB);
     }
 
     do_subi: {
-        CHECK_PROGRAM(SUBI);
+        INS_VALIDATION(SUBI);
         INS_ARITH_IMM_DO(SUBI, -);
-        NEXT_INSTRUCTION(SUBI);
+        INS_STEP(SUBI);
     }
 
     do_mul: {
-        CHECK_PROGRAM(MUL);
+        INS_VALIDATION(MUL);
         INS_ARITH_REG_DO(MUL, *);
-        NEXT_INSTRUCTION(MUL);
+        INS_STEP(MUL);
     }
 
     do_muli: {
-        CHECK_PROGRAM(MULI);
+        INS_VALIDATION(MULI);
         INS_ARITH_IMM_DO(MULI, *);
-        NEXT_INSTRUCTION(MULI);
+        INS_STEP(MULI);
     }
 
     do_jmp: {
-        CHECK_PROGRAM(JMP);
+        INS_VALIDATION(JMP);
 
-        uint64_t jmp_pc = getNext8(pc + LP_INS_JMP_PC_OFFSET, program);
+        uint64_t jmp_pc = getNext8(pc + LP_INS_JMP_ADDR_OFFSET, program);
         pc = jmp_pc;
 
-        NEXT_INSTRUCTION_DIRECT();
+        VM_DISPATCH();
     }
 
     #define INS_BRANCH_REG_DO(name, comparitor) \
         uint8_t src1 = getNext(pc + LP_INS_##name##_SRC1_OFFSET, program); \
         uint8_t src2 = getNext(pc + LP_INS_##name##_SRC2_OFFSET, program); \
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
+        if (registers[src1] comparitor registers[src2]) { \
+            pc += LP_INS_##name##_WIDTH + offset; \
+            VM_DISPATCH(); \
+        } \
         pc += LP_INS_##name##_WIDTH; \
-        if (current_cf->registers[src1] comparitor current_cf->registers[src2]) { pc += offset; }
+        VM_DISPATCH();
 
     #define INS_BRANCH_IMM_DO(name, comparitor) \
-        uint8_t src1 = getNext(pc + LP_INS_##name##_SRC_OFFSET, program); \
+        uint8_t src = getNext(pc + LP_INS_##name##_SRC_OFFSET, program); \
         uint64_t imm = getNext8(pc + LP_INS_##name##_IMM_OFFSET, program); \
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
+        if (registers[src] comparitor imm) { \
+            pc += LP_INS_##name##_WIDTH + offset; \
+            VM_DISPATCH(); \
+        } \
         pc += LP_INS_##name##_WIDTH; \
-        if (current_cf->registers[src1] comparitor imm) { pc += offset; }
+        VM_DISPATCH();
 
     do_beq: {
-        CHECK_PROGRAM(BEQ);
+        INS_VALIDATION(BEQ);
         INS_BRANCH_REG_DO(BEQ, ==);
-        NEXT_INSTRUCTION_DIRECT()
     }
 
     do_beqi: {
-        CHECK_PROGRAM(BEQI);
+        INS_VALIDATION(BEQI);
         INS_BRANCH_IMM_DO(BEQI, ==);
-        NEXT_INSTRUCTION_DIRECT()
     }
 
     do_bne: {
-        CHECK_PROGRAM(BNE);
+        INS_VALIDATION(BNE);
         INS_BRANCH_REG_DO(BNE, !=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bnei: {
-        CHECK_PROGRAM(BNEI);
+        INS_VALIDATION(BNEI);
         INS_BRANCH_IMM_DO(BNEI, !=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bgt: {
-        CHECK_PROGRAM(BGT);
+        INS_VALIDATION(BGT);
         INS_BRANCH_REG_DO(BGT, >);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bgti: {
-        CHECK_PROGRAM(BGTI);
+        INS_VALIDATION(BGTI);
         INS_BRANCH_IMM_DO(BGTI, >);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_blt: {
-        CHECK_PROGRAM(BLT);
+        INS_VALIDATION(BLT);
         INS_BRANCH_REG_DO(BLT, <);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_blti: {
-        CHECK_PROGRAM(BLTI);
+        INS_VALIDATION(BLTI);
         INS_BRANCH_IMM_DO(BLTI, <);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bge: {
-        CHECK_PROGRAM(BGE);
+        INS_VALIDATION(BGE);
         INS_BRANCH_REG_DO(BGE, >=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_bgei: {
-        CHECK_PROGRAM(BGEI);
+        INS_VALIDATION(BGEI);
         INS_BRANCH_IMM_DO(BGEI, >=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_ble: {
-        CHECK_PROGRAM(BLE);
+        INS_VALIDATION(BLE);
         INS_BRANCH_REG_DO(BLE, <=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
     do_blei: {
-        CHECK_PROGRAM(BLEI);
+        INS_VALIDATION(BLEI);
         INS_BRANCH_IMM_DO(BLEI, <=);
-        NEXT_INSTRUCTION_DIRECT();
     }
 
-    do_as: {
-        CHECK_PROGRAM(AS);
+    #define INS_LD_SET(addr, src, bytes) \
+        memcpy(stack + BP + addr, registers + src, bytes * sizeof(uint8_t));
 
-        uint64_t imm = getNext8(pc + LP_INS_AS_IMM_OFFSET, program);
+    #define INS_LD_DO(bytes, char) \
+        uint8_t src = getNext(pc + LP_INS_LD_##char##_SRC_OFFSET, program); \
+        uint64_t addr = getNext8(pc + LP_INS_LD_##char##_ADDR_OFFSET, program); \
+        INS_LD_SET(addr, src, bytes);
 
-        if (((fp + 1) * CFRAME_WIDTH + (sp + imm)) > DATA_SLOTS) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
-        }
-
-        sp += imm;
-        NEXT_INSTRUCTION(AS);
+    do_ld_b: {
+        INS_VALIDATION(LD_B);
+        INS_LD_DO(1, B);
+        INS_STEP(LD_B);
     }
 
-    do_asr: {
-        CHECK_PROGRAM(ASR);
-
-        uint8_t reg = getNext(pc + LP_INS_ASR_REG_OFFSET, program);
-        uint64_t alloc = current_cf->registers[reg];
-
-        if (((fp + 1) * CFRAME_WIDTH + (sp + alloc)) > DATA_SLOTS) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
-        }
-
-        sp += alloc;
-        NEXT_INSTRUCTION(ASR);
+    do_ld_w: {
+        INS_VALIDATION(LD_W);
+        INS_LD_DO(2, W);
+        INS_STEP(LD_W);
     }
 
-    do_fs: {
-        CHECK_PROGRAM(FS);
-
-        uint64_t free = getNext8(pc + LP_INS_FS_IMM_OFFSET, program);
-
-        if (free > sp) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
-        }
-
-        sp -= free;
-        NEXT_INSTRUCTION(FS);
+    do_ld_d: {
+        INS_VALIDATION(LD_D);
+        INS_LD_DO(4, D);
+        INS_STEP(LD_D);
     }
 
-    do_fsr: {
-        CHECK_PROGRAM(FSR);
-
-        uint64_t reg = getNext(pc + LP_INS_FSR_REG_OFFSET, program);
-        uint64_t free = current_cf->registers[reg];
-
-        if (free > sp) {
-            EXIT_PROGRAM(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
-        }
-
-        sp -= free;
-        NEXT_INSTRUCTION(FS);
+    do_ld_q: {
+        INS_VALIDATION(LD_Q);
+        INS_LD_DO(8, Q);
+        INS_STEP(LD_Q);
     }
 
+    #define INS_LDO_DO(bytes, char) \
+        uint8_t src = getNext(pc + LP_INS_LDO_##char##_SRC_OFFSET, program); \
+        uint8_t dst = getNext(pc + LP_INS_LDO_##char##_DST_OFFSET, program); \
+        uint64_t addr = registers[dst]; \
+        int64_t offset = getNext8(pc + LP_INS_LDO_##char##_OFFSET_OFFSET, program); \
+        INS_LD_SET(addr + offset, src, bytes)
+
+    do_ldo_b: {
+        INS_VALIDATION(LDO_B);
+        INS_LDO_DO(1, B);
+        INS_STEP(LDO_B);
+    }
+
+    do_ldo_w: {
+        INS_VALIDATION(LDO_W);
+        INS_LDO_DO(2, W);
+        INS_STEP(LDO_W);
+    }
+
+    do_ldo_d: {
+        INS_VALIDATION(LDO_D);
+        INS_LDO_DO(4, D);
+        INS_STEP(LDO_D);
+    }
+
+    do_ldo_q: {
+        INS_VALIDATION(LDO_Q);
+        INS_LDO_DO(8, Q);
+        INS_STEP(LDO_Q);
+    }
+
+    #define INS_LDR_DO(bytes, char) \
+        uint8_t src = getNext(pc + LP_INS_LDR_##char##_SRC_OFFSET, program); \
+        uint8_t dst = getNext(pc + LP_INS_LDR_##char##_DST_OFFSET, program); \
+        uint8_t offset_reg = getNext(pc + LP_INS_LDR_##char##_OFFSET_REG_OFFSET, program); \
+        uint64_t addr = registers[dst]; \
+        int64_t offset = registers[offset_reg]; \
+        INS_LD_SET(addr + offset, src, bytes);
+
+    do_ldr_b: {
+        INS_VALIDATION(LDR_B);
+        INS_LDR_DO(1, B);
+        INS_STEP(LDR_B);
+    }
+
+    do_ldr_w: {
+        INS_VALIDATION(LDR_W);
+        INS_LDR_DO(2, W);
+        INS_STEP(LDR_W);
+    }
+
+    do_ldr_d: {
+        INS_VALIDATION(LDR_D);
+        INS_LDR_DO(4, D);
+        INS_STEP(LDR_D);
+    }
+
+    do_ldr_q: {
+        INS_VALIDATION(LDR_Q);
+        INS_LDR_DO(8, Q);
+        INS_STEP(LDR_Q);
+    }
+
+    #define INS_ST_SET(dst, addr, bytes) \
+        memcpy(registers + dst, stack + BP + addr, bytes * sizeof(uint8_t)); \
+        memset((uint8_t*)(registers + dst) + bytes * sizeof(uint8_t), 0, sizeof(uint64_t) - bytes * sizeof(uint8_t));
+
+    #define INS_ST_DO(bytes, char) \
+        uint8_t dst = getNext(pc + LP_INS_ST_##char##_DST_OFFSET, program); \
+        uint64_t addr = getNext8(pc + LP_INS_ST_##char##_ADDR_OFFSET, program); \
+        INS_ST_SET(dst, addr, bytes);
+
+    do_st_b: {
+        INS_VALIDATION(ST_B);
+        INS_ST_DO(1, B);
+        INS_STEP(ST_B);
+    }
+
+    do_st_w: {
+        INS_VALIDATION(ST_W);
+        INS_ST_DO(2, W);
+        INS_STEP(ST_W);
+    }
+
+    do_st_d: {
+        INS_VALIDATION(ST_D);
+        INS_ST_DO(4, D);
+        INS_STEP(ST_D);
+    }
+
+    do_st_q: {
+        INS_VALIDATION(ST_Q);
+        INS_ST_DO(8, Q);
+        INS_STEP(ST_Q);
+    }
+
+    #define INS_STO_DO(bytes, char) \
+        uint8_t dst = getNext(pc + LP_INS_STO_##char##_DST_OFFSET, program); \
+        uint8_t src = getNext(pc + LP_INS_STO_##char##_SRC_OFFSET, program); \
+        int64_t offset = getNext8(pc + LP_INS_STO_##char##_OFFSET_OFFSET, program); \
+        uint64_t addr = registers[src]; \
+        INS_ST_SET(dst, addr + offset, bytes);
+
+    do_sto_b: {
+        INS_VALIDATION(STO_B);
+        INS_STO_DO(1, B);
+        INS_STEP(STO_B);
+    }
+
+    do_sto_w: {
+        INS_VALIDATION(STO_W);
+        INS_STO_DO(2, W);
+        INS_STEP(STO_W);
+    }
+
+    do_sto_d: {
+        INS_VALIDATION(STO_D);
+        INS_STO_DO(4, D);
+        INS_STEP(STO_D);
+    }
+
+    do_sto_q: {
+        INS_VALIDATION(STO_Q);
+        INS_STO_DO(8, Q);
+        INS_STEP(STO_Q);
+    }
+
+    #define INS_STR_DO(bytes, char) \
+        uint8_t dst = getNext(pc + LP_INS_STR_##char##_DST_OFFSET, program); \
+        uint8_t src = getNext(pc + LP_INS_STR_##char##_SRC_OFFSET, program); \
+        uint8_t offset_reg = getNext(pc + LP_INS_STR_##char##_OFFSET_REG_OFFSET, program); \
+        uint64_t addr = registers[src]; \
+        int64_t offset = registers[offset_reg]; \
+        INS_ST_SET(dst, addr + offset, bytes);
+
+    do_str_b: {
+        INS_VALIDATION(STR_B);
+        INS_STR_DO(1, B);
+        INS_STEP(STR_B);
+    }
+
+    do_str_w: {
+        INS_VALIDATION(STR_W);
+        INS_STR_DO(2, W);
+        INS_STEP(STR_W);
+    }
+
+    do_str_d: {
+        INS_VALIDATION(STR_D);
+        INS_STR_DO(4, D);
+        INS_STEP(STR_D);
+    }
+
+    do_str_q: {
+        INS_VALIDATION(STR_Q);
+        INS_STR_DO(8, Q);
+        INS_STEP(STR_Q);
+    }
  }

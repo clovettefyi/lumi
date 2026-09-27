@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    LpInstance* vm = lpCreate(program, bytes_read);
+    LpInstance* vm = lpCreate(1024 * 1024, program, bytes_read);
     if (vm == nullptr) {
         printf("Failed to create VM\n");
         free(program);
