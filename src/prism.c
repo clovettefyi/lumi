@@ -161,21 +161,17 @@ uint8_t lpRun(LpInstance* vm) {
     uint64_t pc = vm->pc;
 
     uint64_t* registers = vm->registers;
-
-    uint8_t* stack = vm->stack;
-
     #define BP registers[LP_BP_REG]
     #define SP registers[LP_SP_REG]
 
+    uint8_t* stack = vm->stack;
     const uint64_t stack_size = vm->stack_size;
 
     static const void* dispatch_table[] = {
         [1 ... UINT8_MAX] = &&do_invalid,
         [0] = &&do_segv_pc,
 
-        [LP_INS_NOP] = &&do_nop,
-
-        [LP_INS_EX] = &&do_ex,
+        [LP_INS_HALT] = &&do_halt,
 
         [LP_INS_JAL] = &&do_jal,
         [LP_INS_JALR] = &&do_jalr,
@@ -244,11 +240,19 @@ uint8_t lpRun(LpInstance* vm) {
         [LP_INS_STR_Q] = &&do_str_q,
     };
 
+    #define VM_LIKELY(cond) __builtin_expect(!!(cond), 1)
+    #define VM_UNLIKELY(cond) __builtin_expect(!!(cond), 0)
+
     #define VM_DISPATCH() \
         goto *dispatch_table[program[pc]];
 
     #define INS_VALIDATION(name) \
-        if (!hasNext(pc, program_size, LP_INS_##name##_WIDTH)) { \
+        if (VM_UNLIKELY(!hasNext(pc, program_size, LP_INS_##name##_WIDTH))) { \
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_PC); \
+        }
+
+    #define VM_BOUNDS_VALIDATION(addr) \
+        if (VM_UNLIKELY(addr >= program_size)) { \
             VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_PC); \
         }
 
@@ -270,16 +274,18 @@ uint8_t lpRun(LpInstance* vm) {
         VM_EXIT(LP_EX_SIG_ERR + LP_SIG_ILL);
     }
 
-    do_nop: {
-        INS_STEP(NOP);
-    }
-
-    do_ex: {
-        pc += LP_INS_EX_WIDTH;
+    do_halt: {
+        pc += LP_INS_HALT_WIDTH;
         VM_EXIT(registers[0]);
     }
 
     #define INS_JAL_STACK 16
+
+    #define INS_JAL_VALIDATION() \
+        if (VM_UNLIKELY(INS_JAL_STACK > stack_size || SP > stack_size - INS_JAL_STACK)) { \
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF); \
+        }
+
     #define INS_JAL(new_addr, old_addr) \
         memcpy(stack + SP, &old_addr, sizeof(old_addr)); \
         SP += sizeof(old_addr); \
@@ -291,12 +297,11 @@ uint8_t lpRun(LpInstance* vm) {
 
     do_jal: {
         INS_VALIDATION(JAL);
-
-        if (SP + INS_JAL_STACK > stack_size) {
-            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
-        }
+        INS_JAL_VALIDATION();
 
         uint64_t new_addr = getNext8(pc + LP_INS_JAL_ADDR_OFFSET, program);
+        VM_BOUNDS_VALIDATION(new_addr);
+
         uint64_t old_addr = pc + LP_INS_JAL_WIDTH;
 
         INS_JAL(new_addr, old_addr);
@@ -306,13 +311,12 @@ uint8_t lpRun(LpInstance* vm) {
 
     do_jalr: {
         INS_VALIDATION(JALR);
-
-        if (SP + INS_JAL_STACK > stack_size) {
-            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF);
-        }
+        INS_JAL_VALIDATION();
 
         uint8_t reg = getNext(pc + LP_INS_JALR_DST_OFFSET, program);
         uint64_t new_addr = registers[reg];
+        VM_BOUNDS_VALIDATION(new_addr);
+
         uint64_t old_addr = pc + LP_INS_JALR_WIDTH;
 
         INS_JAL(new_addr, old_addr);
@@ -321,7 +325,7 @@ uint8_t lpRun(LpInstance* vm) {
     }
 
     do_ret: {
-        if (BP == 0) {
+        if (VM_UNLIKELY(BP == 0)) {
             VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SUF);
         }
 
@@ -331,6 +335,7 @@ uint8_t lpRun(LpInstance* vm) {
         memcpy(&old_bp, stack + BP - sizeof(old_bp), sizeof(old_bp));
         BP -= sizeof(old_bp);
         memcpy(&old_addr, stack + BP - sizeof(old_addr), sizeof(old_addr));
+        VM_BOUNDS_VALIDATION(old_addr);
 
         BP = old_bp;
         SP = BP;
@@ -414,6 +419,8 @@ uint8_t lpRun(LpInstance* vm) {
         INS_VALIDATION(JMP);
 
         uint64_t jmp_pc = getNext8(pc + LP_INS_JMP_ADDR_OFFSET, program);
+        VM_BOUNDS_VALIDATION(jmp_pc);
+
         pc = jmp_pc;
 
         VM_DISPATCH();
@@ -425,6 +432,7 @@ uint8_t lpRun(LpInstance* vm) {
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
         if (registers[src1] comparitor registers[src2]) { \
             pc += LP_INS_##name##_WIDTH + offset; \
+            VM_BOUNDS_VALIDATION(pc); \
             VM_DISPATCH(); \
         } \
         pc += LP_INS_##name##_WIDTH; \
@@ -436,6 +444,7 @@ uint8_t lpRun(LpInstance* vm) {
         int64_t offset = getNext8(pc + LP_INS_##name##_OFFSET_OFFSET, program); \
         if (registers[src] comparitor imm) { \
             pc += LP_INS_##name##_WIDTH + offset; \
+            VM_BOUNDS_VALIDATION(pc); \
             VM_DISPATCH(); \
         } \
         pc += LP_INS_##name##_WIDTH; \
@@ -501,12 +510,18 @@ uint8_t lpRun(LpInstance* vm) {
         INS_BRANCH_IMM_DO(BLEI, <=);
     }
 
+    #define VM_STACK_VALIDATION(addr, bytes) \
+        if (VM_UNLIKELY(bytes > stack_size || addr > stack_size - bytes)) { \
+            VM_EXIT(LP_EX_SIG_ERR + LP_SIG_SEGV_SOF); \
+        }
+
     #define INS_LD_SET(addr, src, bytes) \
-        memcpy(stack + BP + addr, registers + src, bytes * sizeof(uint8_t));
+        memcpy(stack + addr, registers + src, bytes * sizeof(uint8_t));
 
     #define INS_LD_DO(bytes, char) \
         uint8_t src = getNext(pc + LP_INS_LD_##char##_SRC_OFFSET, program); \
         uint64_t addr = getNext8(pc + LP_INS_LD_##char##_ADDR_OFFSET, program); \
+        VM_STACK_VALIDATION(addr, bytes); \
         INS_LD_SET(addr, src, bytes);
 
     do_ld_b: {
@@ -538,7 +553,9 @@ uint8_t lpRun(LpInstance* vm) {
         uint8_t dst = getNext(pc + LP_INS_LDO_##char##_DST_OFFSET, program); \
         uint64_t addr = registers[dst]; \
         int64_t offset = getNext8(pc + LP_INS_LDO_##char##_OFFSET_OFFSET, program); \
-        INS_LD_SET(addr + offset, src, bytes)
+        addr += offset; \
+        VM_STACK_VALIDATION(addr, bytes); \
+        INS_LD_SET(addr, src, bytes)
 
     do_ldo_b: {
         INS_VALIDATION(LDO_B);
@@ -569,8 +586,9 @@ uint8_t lpRun(LpInstance* vm) {
         uint8_t dst = getNext(pc + LP_INS_LDR_##char##_DST_OFFSET, program); \
         uint8_t offset_reg = getNext(pc + LP_INS_LDR_##char##_OFFSET_REG_OFFSET, program); \
         uint64_t addr = registers[dst]; \
-        int64_t offset = registers[offset_reg]; \
-        INS_LD_SET(addr + offset, src, bytes);
+        addr += registers[offset_reg]; \
+        VM_STACK_VALIDATION(addr, bytes); \
+        INS_LD_SET(addr, src, bytes);
 
     do_ldr_b: {
         INS_VALIDATION(LDR_B);
@@ -597,12 +615,13 @@ uint8_t lpRun(LpInstance* vm) {
     }
 
     #define INS_ST_SET(dst, addr, bytes) \
-        memcpy(registers + dst, stack + BP + addr, bytes * sizeof(uint8_t)); \
+        memcpy(registers + dst, stack + addr, bytes * sizeof(uint8_t)); \
         memset((uint8_t*)(registers + dst) + bytes * sizeof(uint8_t), 0, sizeof(uint64_t) - bytes * sizeof(uint8_t));
 
     #define INS_ST_DO(bytes, char) \
         uint8_t dst = getNext(pc + LP_INS_ST_##char##_DST_OFFSET, program); \
         uint64_t addr = getNext8(pc + LP_INS_ST_##char##_ADDR_OFFSET, program); \
+        VM_STACK_VALIDATION(addr, bytes); \
         INS_ST_SET(dst, addr, bytes);
 
     do_st_b: {
@@ -634,7 +653,9 @@ uint8_t lpRun(LpInstance* vm) {
         uint8_t src = getNext(pc + LP_INS_STO_##char##_SRC_OFFSET, program); \
         int64_t offset = getNext8(pc + LP_INS_STO_##char##_OFFSET_OFFSET, program); \
         uint64_t addr = registers[src]; \
-        INS_ST_SET(dst, addr + offset, bytes);
+        addr += offset; \
+        VM_STACK_VALIDATION(addr, bytes); \
+        INS_ST_SET(dst, addr, bytes);
 
     do_sto_b: {
         INS_VALIDATION(STO_B);
@@ -665,8 +686,9 @@ uint8_t lpRun(LpInstance* vm) {
         uint8_t src = getNext(pc + LP_INS_STR_##char##_SRC_OFFSET, program); \
         uint8_t offset_reg = getNext(pc + LP_INS_STR_##char##_OFFSET_REG_OFFSET, program); \
         uint64_t addr = registers[src]; \
-        int64_t offset = registers[offset_reg]; \
-        INS_ST_SET(dst, addr + offset, bytes);
+        addr += registers[offset_reg]; \
+        VM_STACK_VALIDATION(addr, bytes); \
+        INS_ST_SET(dst, addr, bytes);
 
     do_str_b: {
         INS_VALIDATION(STR_B);

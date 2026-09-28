@@ -35,9 +35,7 @@ typedef struct {
 #define LP_SP_REG 0xFE
 
 typedef enum LP_TYPED_ENUM(uint8_t) {
-    LP_INS_EX = 0xFF,
-
-    LP_INS_NOP = 0x01,
+    LP_INS_HALT = 0xEF,
 
     LP_INS_JAL  = 0x10,
     LP_INS_JALR = 0x11,
@@ -128,7 +126,7 @@ typedef enum LP_TYPED_ENUM(uint8_t) {
 
 #define LP_INS_NOP_WIDTH 1
 
-#define LP_INS_EX_WIDTH 1
+#define LP_INS_HALT_WIDTH 1
 
 #define LP_INS_JAL_WIDTH 1 + 8
 #define LP_INS_JAL_ADDR_OFFSET 1
